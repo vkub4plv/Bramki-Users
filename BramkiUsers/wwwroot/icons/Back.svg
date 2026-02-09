@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800px" height="800px" viewBox="0 0 512 512">
+  <title>ionicons-v5-a</title>
+  <defs>
+    <!-- Global diagonal gradient -->
+    <linearGradient id="globalGradient" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ff0057" />
+      <stop offset="100%" stop-color="#bd00ff" />
+    </linearGradient>
+
+    <!-- Mask from arrow stroke -->
+    <mask id="shapesMask" maskUnits="userSpaceOnUse">
+      <!-- Transparent background -->
+      <rect x="0" y="0" width="100%" height="100%" fill="black"/>
+      <!-- Arrow path in white -->
+      <polyline points="328 112 184 256 328 400"
+                fill="none"
+                stroke="white"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="48"/>
+    </mask>
+  </defs>
+
+  <!-- Transparent background -->
+  <rect x="0" y="0" width="100%" height="100%" fill="none"/>
+
+  <!-- Gradient rectangle masked by arrow -->
+  <rect x="0" y="0" width="100%" height="100%" fill="url(#globalGradient)" mask="url(#shapesMask)"/>
+</svg>

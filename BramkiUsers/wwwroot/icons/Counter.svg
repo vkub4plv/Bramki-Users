@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="64" height="64" viewBox="0 0 64 64" xml:space="preserve"
+     role="img" aria-label="Counter badge">
+  <title>Counter Badge</title>
+  <defs>
+    <!-- Diagonal gradient with CSS vars -->
+    <linearGradient id="counterGradient" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ff0057" />
+      <stop offset="100%" stop-color="#bd00ff" />
+    </linearGradient>
+  </defs>
+
+  <!-- Circle filled with gradient -->
+  <circle cx="32" cy="32" r="30" fill="url(#counterGradient)" />
+
+  <!-- Number text (change content to 1–99) -->
+  <text x="32" y="36"
+        fill="#fff"
+        font-size="24"
+        font-weight="700"
+        font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif"
+        text-anchor="middle"
+        dominant-baseline="middle">
+    5
+  </text>
+</svg>

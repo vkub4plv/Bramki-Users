@@ -1,0 +1,16 @@
+﻿.phone-content {
+    --menu-gap: 100px;
+    padding-top: 0px;
+}
+
+@media screen and (max-height: 1080px) {
+    .phone-content {
+        --menu-gap: 80px;
+    }
+}
+
+@media screen and (max-height: 720px) {
+    .phone-content {
+        --menu-gap: 60px;
+    }
+}

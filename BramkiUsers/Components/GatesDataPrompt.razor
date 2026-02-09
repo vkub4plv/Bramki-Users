@@ -1,0 +1,51 @@
+﻿<div class="form-grid" style="margin-top:26px">
+    <div style="grid-column:1 / -1; font-weight:600; margin-bottom:6px; opacity: 1; text-transform:uppercase; letter-spacing:.5px; font-size: 24px;">
+        @Title
+    </div>
+
+    <label class="check-row">
+        <input type="checkbox" @bind="ForkliftsValue" />
+        <span>Uprawnienia na wózki</span>
+    </label>
+
+    <label class="check-row">
+        <input type="checkbox" @bind="CranesValue" />
+        <span>Uprawnienia na suwnice</span>
+    </label>
+
+    <label class="check-row">
+        <input type="checkbox" @bind="GantriesValue" />
+        <span>Uprawnienia na żurawie</span>
+    </label>
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "UZUPEŁNIJ BRAKUJĄCE DANE:";
+
+    [Parameter] public bool Forklifts { get; set; }
+    [Parameter] public EventCallback<bool> ForkliftsChanged { get; set; }
+
+    [Parameter] public bool Cranes { get; set; }
+    [Parameter] public EventCallback<bool> CranesChanged { get; set; }
+
+    [Parameter] public bool Gantries { get; set; }
+    [Parameter] public EventCallback<bool> GantriesChanged { get; set; }
+
+    private bool ForkliftsValue
+    {
+        get => Forklifts;
+        set { if (value != Forklifts) { Forklifts = value; _ = ForkliftsChanged.InvokeAsync(value); } }
+    }
+
+    private bool CranesValue
+    {
+        get => Cranes;
+        set { if (value != Cranes) { Cranes = value; _ = CranesChanged.InvokeAsync(value); } }
+    }
+
+    private bool GantriesValue
+    {
+        get => Gantries;
+        set { if (value != Gantries) { Gantries = value; _ = GantriesChanged.InvokeAsync(value); } }
+    }
+}

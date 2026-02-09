@@ -1,0 +1,382 @@
+﻿@page "/employees/{id:int}/cards/issue"
+@attribute [Authorize(Policy = "CardsIssueAccess")]
+@using Microsoft.EntityFrameworkCore
+@using BramkiUsers.Data
+@inject NavigationManager Nav
+@inject EmployeeState State
+@inject IDbContextFactory<RaportowanieContext> RapDb
+@inject IDbContextFactory<HRContext> HRDb
+@inject BramkiUsers.Wcf.VisoFacadeShared Viso
+@inject IDepartmentLookup DeptLookup
+@inject TemplateMailer Mailer
+@inject IToastService Toasts
+
+<div class="phone-shell">
+    <div class="phone-inner edit-inner">
+        <!-- Header (Back | centered title | spacer) -->
+        <div class="panel-header">
+            <button class="back-btn" @onclick="GoBack" title="Wróć">
+                <img src="icons/Back.svg" alt="Wstecz" class="back-icon" />
+            </button>
+
+            <div class="panel-title">
+                <img src="icons/Karty.svg" alt="" class="title-icon" />
+                <span>Wydanie kart</span>
+            </div>
+
+            <div class="panel-spacer"></div>
+        </div>
+
+        <!-- Body -->
+        <div class="edit-scroll">
+            @if (_loading)
+            {
+                <div style="padding:12px">Ładowanie…</div>
+            }
+            else if (State.User is null)
+            {
+                <div style="padding:12px">Użytkownik nie znaleziony.</div>
+            }
+            else
+            {
+                <ToastHost />
+                <!-- 4 readonly fields -->
+                <EmployeeSummaryReadonly Id="@id" />
+
+                <div class="form-grid" style="margin-top:18px">
+                    @if (HasForklifts)
+                    {
+                        <label class="check-row disabled">
+                            <input type="checkbox" checked disabled />
+                            <span>Uprawnienia na wózki</span>
+                        </label>
+                    }
+                    @if (HasCranes)
+                    {
+                        <label class="check-row disabled">
+                            <input type="checkbox" checked disabled />
+                            <span>Uprawnienia na suwnice</span>
+                        </label>
+                    }
+                    @if (HasGantries)
+                    {
+                        <label class="check-row disabled">
+                            <input type="checkbox" checked disabled />
+                            <span>Uprawnienia na żurawie</span>
+                        </label>
+                    }
+                </div>
+
+                <div class="scroll-spacer"></div>
+
+                <div class="form-grid" style="margin-top:18px">
+                    <!-- Card number (digits only) -->
+                    <label class="field-label" for="card">Numer karty</label>
+                    <input id="card" class="text-input"
+                           inputmode="numeric" pattern="\d*" title="Tylko cyfry"
+                           @bind="CardNumber" @bind:event="oninput" />
+
+                    <!-- CTA -->
+                    <div class="cta-wrap" style="grid-column:1 / -1; margin-top:14px">
+                        <button class="gbtn gbtn-border gbtn-cta"
+                                disabled="@_busy"
+                                @onclick="AddAsync">
+                            @(_busy ? "Przetwarzanie…" : "Dodaj")
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public int id { get; set; }
+
+    [Inject] private IAudit<Issue> Audit { get; set; } = default!;
+
+    private sealed record IssueCardAudit(
+        int EmployeeId,
+        string? ErpId,
+        string CardNumberDec,
+        string HRSystemNumber,
+        bool HasPpeStorageCabinets,
+        bool HasLunch,
+        bool HasForklifts,
+        bool HasCranes,
+        bool HasGantries,
+        bool HadCardBefore
+    );
+
+    private bool _loading = true;
+    private bool _busy = false;
+
+    private static string Digits(string? s) => new string((s ?? "").Where(char.IsDigit).ToArray());
+    private static string DecToHex(string dec)
+    {
+        if (string.IsNullOrWhiteSpace(dec)) return "";
+        if (!ulong.TryParse(dec, out var v)) throw new InvalidOperationException("Numer karty jest nieprawidłowy.");
+        return v.ToString("X"); // uppercase hex w/o 0x
+    }
+
+    // digits-only card number (kept as string)
+    private string _cardNumber = "";
+    private string CardNumber
+    {
+        get => _cardNumber;
+        set => _cardNumber = Digits(value);
+    }
+
+    private bool HasForklifts => State.Gate?.Forklifts == true;
+    private bool HasCranes => State.Gate?.Cranes == true;
+    private bool HasGantries => State.Gate?.Gantries == true;
+
+    private string FirstName = "";
+    private string LastName = "";
+
+    private static (string First, string Last) SplitName(string? full)
+    {
+        var n = (full ?? "").Trim();
+        if (n.Length == 0) return ("", "");
+        var i = n.LastIndexOf(' ');
+        if (i <= 0 || i == n.Length - 1) return (n, "");
+        return (n[..i], n[(i + 1)..]);
+    }
+
+    private static string? ToLunchCard(string? dec)
+    {
+        if (string.IsNullOrWhiteSpace(dec)) return null;
+
+        // Accept big values; use the low 32 bits for the lunch mapping
+        if (!ulong.TryParse(dec, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v))
+            return null;
+
+        uint low32 = (uint)(v & 0xFFFFFFFFUL);
+        uint reversed = BinaryPrimitives.ReverseEndianness(low32);
+        return reversed.ToString("D10", CultureInfo.InvariantCulture);
+    }
+
+    private static string? ToPpeStorageCabinetsCard(string? dec)
+    {
+        if (string.IsNullOrWhiteSpace(dec)) return null;
+
+        // Accept big values; use the low 32 bits for the PpeStorageCabinets mapping
+        if (!ulong.TryParse(dec, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v))
+            return null;
+
+        uint low32 = (uint)(v & 0xFFFFFFFFUL);
+        uint reversed = BinaryPrimitives.ReverseEndianness(low32);
+        return reversed.ToString("X8", CultureInfo.InvariantCulture); // HEX
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        await DeptLookup.EnsureLoadedAsync();
+        await State.LoadAsync(id);    // ensure State.User & State.Gate are populated
+        _loading = false;
+    }
+
+    private async Task AddAsync()
+    {
+        if (_busy) return;
+
+        var erp = State.User?.ErpId?.Trim();
+
+        // Normalized HRSystem (digits only) from DGates
+        var hrSystem = Digits(State.Gate?.HRSystem);
+        var hadCardBeforeInState = !string.IsNullOrWhiteSpace(State.User?.CardNumber);
+
+        var input = new IssueCardAudit(
+            EmployeeId: id,
+            ErpId: erp,
+            CardNumberDec: CardNumber,
+            HRSystemNumber: hrSystem,
+            HasPpeStorageCabinets: State.Gate?.PpeStorageCabinets == true,
+            HasLunch: State.Gate?.Lunch == true,
+            HasForklifts: HasForklifts,
+            HasCranes: HasCranes,
+            HasGantries: HasGantries,
+            HadCardBefore: hadCardBeforeInState
+        );
+
+        using var audit = Audit.Begin(action: "Cards.Issue", erpId: erp);
+        audit.LogStart(input);
+
+        if (string.IsNullOrWhiteSpace(erp))
+        {
+            audit.Warn("Cannot issue card: missing ERPID in Raportowanie for EmployeeId={EmployeeId}.", id);
+            Toasts.Show("Brak numeru ERP w bazie danych.", "warn");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(CardNumber))
+        {
+            audit.Warn("Validation failed: empty CardNumber for ErpId={ErpId}.", erp);
+            Toasts.Show("Podaj numer karty (tylko cyfry).", "warn");
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            // --- 1) Raportowanie: update card numbers (DEC + HEX) ---
+            bool hadCardBefore = false;
+            string hex = DecToHex(CardNumber);
+            string? lunchCardNumber = ToLunchCard(CardNumber);
+            string? ppeStorageCabinetsCardNumber = ToPpeStorageCabinetsCard(CardNumber);
+            (FirstName, LastName) = SplitName(State.User?.Name);
+
+            audit.Info("Raportowanie: updating card numbers for ErpId={ErpId}. DEC={Dec}, HEX={Hex}.", erp, CardNumber, hex);
+
+            await using (var db = await RapDb.CreateDbContextAsync())
+            {
+                var user = await db.DUsers.SingleOrDefaultAsync(u => u.ErpId == erp);
+                if (user is null)
+                    throw new InvalidOperationException($"Brak użytkownika w bazie (ERPID {erp}).");
+
+                hadCardBefore = !string.IsNullOrWhiteSpace(user.CardNumber);
+
+                user.CardNumber = CardNumber; // DEC
+                user.CardNumber2 = hex;       // HEX
+                user.ModifiedOn = DateTime.Now;
+
+                await db.SaveChangesAsync();
+            }
+
+            audit.Info("Raportowanie: card numbers updated for ErpId={ErpId}. HadCardBefore={HadCardBefore}.", erp, hadCardBefore);
+
+            // --- 2) HR: delete old cards for employee + insert new one ---
+            bool hrEmployeeMissing = false;
+
+            await using (var hr = await HRDb.CreateDbContextAsync())
+            {
+                // Fetch tracked entity
+                var emp = await hr.Employees.SingleOrDefaultAsync(e => e.EmNumber == erp);
+                if (emp is null)
+                {
+                    hrEmployeeMissing = true;
+                    audit.Warn("HR: employee not found for ErpId={ErpId}. Will notify HR.", erp);
+                }
+                else
+                {
+                    // Update EmLogin from HRSystem (if provided and didn't have card before)
+                    if (!string.IsNullOrWhiteSpace(hrSystem) && !hadCardBefore)
+                        emp.EmLogin = hrSystem;
+
+                    var eid = emp.EmId;
+
+                    // delete all existing cards for this employee
+                    var old = hr.EmployeeCards.Where(ec => ec.EcEmployeeId == eid);
+                    hr.EmployeeCards.RemoveRange(old);
+
+                    // insert new card with open-ended validity
+                    hr.EmployeeCards.Add(new EmployeeCard
+                    {
+                        EcEmployeeId = eid,
+                        EcNumber = CardNumber,
+                        EcDateFrom = 0,
+                        EcDateTo = 2145826800
+                    });
+
+                    await hr.SaveChangesAsync();
+
+                    audit.Info("HR: card updated for ErpId={ErpId}, EmId={EmId}.", erp, eid);
+                }
+            }
+
+            // --- 3) VISO: issue main card (keeps "Zastępcza" credentials) ---
+            audit.Info("VISO: issuing main card for ErpId={ErpId}, DEC={Dec}.", erp, CardNumber);
+            await Viso.IssueMainCardAsync(erp, CardNumber);
+            audit.Info("VISO: main card issued for ErpId={ErpId}.", erp);
+
+            // --- 4) Emails (based on gates) ---
+            var g = State.Gate;
+            string? deptName = null;
+            if (DeptLookup.TryGetInfo(State.User?.DepartmentId, out var dInfo))
+                deptName = dInfo.Name;
+
+            // HR if employee missing in HR
+            if (hrEmployeeMissing)
+            {
+                audit.Info("Sending 'HR' e-mail for ErpId={ErpId}.", erp);
+                await Mailer.SendAsync("HR", new
+                {
+                    ErpId = erp,
+                    FirstName = FirstName.Trim(),
+                    LastName = LastName.Trim(),
+                    DepartmentName = deptName,
+                    CardNumber = CardNumber,
+                    HRSystem = hrSystem
+                });
+            }
+
+            // Szafy ŚOI (if enabled)
+            if (g?.PpeStorageCabinets == true)
+            {
+                audit.Info("Sending 'SzafyŚOI' e-mail for ErpId={ErpId}.", erp);
+                await Mailer.SendAsync("SzafyŚOI", new
+                {
+                    ErpId = erp,
+                    FirstName = FirstName.Trim(),
+                    LastName = LastName.Trim(),
+                    DepartmentName = deptName,
+                    PpeStorageCabinetsCardNumber = ppeStorageCabinetsCardNumber
+                });
+            }
+
+            // Obiady (both targets if lunch is enabled)
+            if (g?.Lunch == true)
+            {
+                audit.Info("Sending lunch e-mails 'Obiady' and 'Obiady2' for ErpId={ErpId}.", erp);
+
+                await Mailer.SendAsync("Obiady", new
+                {
+                    ErpId = erp,
+                    FirstName = FirstName.Trim(),
+                    LastName = LastName.Trim(),
+                    DepartmentName = deptName,
+                    CardNumber = CardNumber,
+                    PhoneNumber = g?.Phone
+                });
+                await Mailer.SendAsync("Obiady2", new
+                {
+                    ErpId = erp,
+                    FirstName = FirstName.Trim(),
+                    LastName = LastName.Trim(),
+                    LunchCardNumber = lunchCardNumber
+                });
+            }
+
+            // Wózki (if forklifts)
+            if (g?.Forklifts == true)
+            {
+                audit.Info("Sending 'Wózki' e-mail for ErpId={ErpId}.", erp);
+                await Mailer.SendAsync("Wózki", new
+                {
+                    ErpId = erp,
+                    FirstName = FirstName.Trim(),
+                    LastName = LastName.Trim(),
+                    DepartmentName = deptName,
+                    CardNumber2 = hex
+                });
+            }
+
+            audit.Info("Cards.Issue completed successfully for ErpId={ErpId}.", erp);
+
+            Toasts.Show("Wydano kartę.", "success", 1500);
+            await Task.Delay(1500);
+            Nav.NavigateTo($"employees/{id}/cards");
+        }
+        catch (Exception ex)
+        {
+            audit.Error(ex, "Error while issuing card for ErpId={ErpId}.", erp);
+            Toasts.Show("Błąd podczas wydawania karty: " + ex.Message, "error");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void GoBack() => Nav.NavigateTo($"employees/{id}/cards");
+}

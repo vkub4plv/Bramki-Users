@@ -1,0 +1,82 @@
+﻿@using BramkiUsers.Data
+@inject EmployeeState State
+@inject IDepartmentLookup DeptLookup
+@inject NavigationManager Nav
+
+@* Props *@
+@code {
+    [Parameter] public int Id { get; set; }
+
+    // If user not found, auto-redirect back to employees list
+    [Parameter] public bool AutoNavigateIfMissing { get; set; } = true;
+    [Parameter] public string NavigateTo { get; set; } = "employees";
+
+    private bool _loaded;
+    private string ErpId = "";
+    private string FirstName = "";
+    private string LastName = "";
+    private string DepartmentName = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await DeptLookup.EnsureLoadedAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Single source of truth: EmployeeState
+        await State.LoadAsync(Id);
+
+        if (State.User is null)
+        {
+            if (AutoNavigateIfMissing)
+            {
+                Nav.NavigateTo(NavigateTo, true);
+                return;
+            }
+            // Render nothing if not found and no redirect
+            _loaded = true;
+            ErpId = FirstName = LastName = DepartmentName = "";
+            return;
+        }
+
+        ErpId = State.User.ErpId ?? "";
+        (FirstName, LastName) = SplitName(State.User.Name);
+        DepartmentName = TryDeptName(State.User.DepartmentId);
+        _loaded = true;
+    }
+
+    private static (string First, string Last) SplitName(string? full)
+    {
+        var n = (full ?? "").Trim();
+        if (n.Length == 0) return ("", "");
+        var i = n.LastIndexOf(' ');
+        if (i <= 0 || i == n.Length - 1) return (n, "");
+        return (n[..i], n[(i + 1)..]);
+    }
+
+    private string TryDeptName(int? deptId)
+        => DeptLookup.TryGetInfo(deptId, out var info) ? info.Name : "";
+
+}
+
+@if (_loaded && State.User is not null)
+{
+    <div class="form-grid">
+        <!-- ERPID -->
+        <label class="field-label" for="erpid-ro">Numer pracownika</label>
+        <input id="erpid-ro" class="text-input" value="@ErpId" readonly aria-readonly="true" />
+
+        <!-- First name -->
+        <label class="field-label" for="first-ro">Imię</label>
+        <input id="first-ro" class="text-input" value="@FirstName" readonly aria-readonly="true" />
+
+        <!-- Last name -->
+        <label class="field-label" for="last-ro">Nazwisko</label>
+        <input id="last-ro" class="text-input" value="@LastName" readonly aria-readonly="true" />
+
+        <!-- Department name -->
+        <label class="field-label" for="dept-ro">Dział</label>
+        <input id="dept-ro" class="text-input" value="@DepartmentName" readonly aria-readonly="true" />
+    </div>
+}

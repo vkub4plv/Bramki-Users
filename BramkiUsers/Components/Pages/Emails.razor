@@ -1,0 +1,204 @@
+﻿@page "/emails"
+@attribute [Authorize(Policy = "EmailsAccess")]
+@using BramkiUsers.Data
+@using Microsoft.EntityFrameworkCore
+@using System.Threading
+@inject IDbContextFactory<RaportowanieContext> DbFactory
+@inject NavigationManager Nav
+
+<div class="phone-shell">
+    <div class="phone-inner mails-inner">
+        <!-- Header (Back on left, centered title, spacer on right) -->
+        <div class="panel-header">
+            <button class="back-btn" @onclick="GoHome" title="Wróć">
+                <img src="icons/Back.svg" alt="Wstecz" class="back-icon" />
+            </button>
+
+            <div class="panel-title">
+                <img src="icons/E-Mail.svg" alt="" class="title-icon" />
+                <span>E-Maile</span>
+            </div>
+
+            <div class="panel-spacer"></div>
+        </div>
+
+        @if (_rows is null)
+        {
+            <div class="loading">Wczytywanie…</div>
+        }
+        else
+        {
+            <div class="mails-scroll">
+                @foreach (var r in _rows)
+                {
+                    <div class="mail-row">
+                        <label>@r.Label</label>
+
+                        <!-- INPUT + centered confirmation overlay -->
+                        <div class="input-wrap">
+                            <input class="mail-input @(r.IsValid || !r.IsDirty ? null : "invalid")"
+                                   type="email"
+                                   placeholder="adres@firma.com"
+                                   value="@r.Email"
+                                   @oninput="e => OnEdit(r, e.Value?.ToString() ?? string.Empty)" />
+
+                            <span class="save-confirm @(r.JustSaved ? "show" : null)"
+                                  role="status" aria-live="polite">
+                                ✓ Zapisano
+                            </span>
+                        </div>
+
+                        <!-- Save button (disabled until changed & valid) -->
+                        <button class="save-btn gbtn gbtn-border"
+                                disabled="@( IsDisabled(r) )"
+                                aria-disabled="@( IsDisabled(r) )"
+                                title="Zapisz"
+                                @onclick="() => SaveAsync(r)">
+                            <img src="@GetSaveIcon(r)" alt="Zapisz" class="save-icon" />
+                        </button>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Inject] private IAudit<Emails> Audit { get; set; } = default!;
+
+    private sealed record EmailInputAudit(
+        int Id,
+        string Label,
+        string? OriginalEmail,
+        string? NewEmail
+    );
+
+    private List<MailRow>? _rows;
+    private int? _savingId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        _rows = await db.DMails
+            .AsNoTracking()
+            .OrderBy(m => m.MailsId)                // DB order by ID asc
+            .Select(m => new MailRow(
+                m.MailsId,
+                m.MailsName ?? string.Empty,        // use the DB label
+                m.MailsEmail ?? string.Empty))
+            .ToListAsync();
+    }
+
+    private void GoHome() => Nav.NavigateTo(Nav.BaseUri);
+
+    private void OnEdit(MailRow row, string value)
+    {
+        row.Email = value;
+        row.IsDirty = !string.Equals(row.Email?.Trim(), row.Original?.Trim(), StringComparison.Ordinal);
+        row.IsValid = IsValidEmail(row.Email);
+        StateHasChanged();
+    }
+
+    private async Task SaveAsync(MailRow row)
+    {
+        if (!row.IsDirty || !row.IsValid) return;
+
+        var input = new EmailInputAudit(
+            Id: row.Id,
+            Label: row.Label,
+            OriginalEmail: row.Original,
+            NewEmail: row.Email
+        );
+
+        using var audit = Audit.Begin(action: "Emails.Save", erpId: null);
+        audit.LogStart(input);
+
+        try
+        {
+            _savingId = row.Id;
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            var trimmed = row.Email!.Trim();
+            if (!IsValidEmail(trimmed))
+            {
+                audit.Warn("Validation failed: e-mail '{Email}' is not valid.", row.Email);
+                return;
+            }
+
+            var entity = await db.DMails.FirstOrDefaultAsync(x => x.MailsId == row.Id);
+            if (entity is null)
+            {
+                audit.Warn("DB row not found for DMails.MailsId={Id}.", row.Id);
+                return;
+            }
+
+            entity.MailsEmail = trimmed;
+            await db.SaveChangesAsync();
+
+            audit.Info("DB: updated DMails row Id={Id} from '{OldEmail}' to '{NewEmail}'.",
+                row.Id, input.OriginalEmail, trimmed);
+
+            // UI success state
+            row.Original = row.Email;
+            row.IsDirty = false;
+
+            row.ToastCts?.Cancel();
+            var cts = new CancellationTokenSource();
+            row.ToastCts = cts;
+
+            row.JustSaved = true;
+            StateHasChanged();
+
+            try { await Task.Delay(1500, cts.Token); } catch (TaskCanceledException) { /* ignore */ }
+
+            if (!cts.IsCancellationRequested)
+            {
+                row.JustSaved = false;
+                await InvokeAsync(StateHasChanged);
+            }
+
+            audit.Info("Emails.Save completed for Id={Id}.", row.Id);
+        }
+        catch (Exception ex)
+        {
+            audit.Error(ex, "Unexpected error while saving email row Id={Id}.", row.Id);
+            throw;
+        }
+        finally
+        {
+            _savingId = null;
+        }
+    }
+
+    // E-mail validation
+    private static bool IsValidEmail(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return false;
+        try { var a = new System.Net.Mail.MailAddress(s.Trim()); return a.Address == s.Trim(); }
+        catch { return false; }
+    }
+
+    private sealed class MailRow
+    {
+        public MailRow(int id, string label, string email)
+        { Id = id; Label = label; Email = email; Original = email; IsValid = IsValidEmail(email); }
+        public int Id { get; }
+        public string Label { get; }
+        public string? Email { get; set; }
+        public string? Original { get; set; }
+        public bool IsDirty { get; set; }
+        public bool IsValid { get; set; }
+
+        // confirmation UI
+        public bool JustSaved { get; set; }
+        public CancellationTokenSource? ToastCts { get; set; }
+    }
+
+    // Icons + helpers
+    private const string SaveIconEnabled = "icons/Save.svg";
+    private const string SaveIconDisabled = "icons/Save-disabled.svg";
+    private bool IsDisabled(MailRow r) => !r.IsDirty || !r.IsValid || _savingId == r.Id;
+    private string GetSaveIcon(MailRow r) => IsDisabled(r) ? SaveIconDisabled : SaveIconEnabled;
+}

@@ -1,0 +1,93 @@
+﻿.phone-inner.mails-inner {
+    height: 100%;
+    display: grid;
+    grid-template-rows: auto 1fr; /* header | scroll */
+}
+
+/* Scrollable rows */
+.mails-scroll {
+    overflow: auto;
+    padding: 16px 14px 20px;
+}
+
+/* Row layout */
+.mail-row {
+    display: grid;
+    grid-template-columns: 1fr auto; /* input | save */
+    row-gap: 8px;
+    margin-bottom: 22px;
+}
+
+    .mail-row > label {
+        grid-column: 1 / -1;
+        color: #e7e7ea;
+        font-weight: 600;
+        margin-left: 4px;
+    }
+
+/* Input + centered confirmation overlay */
+.input-wrap {
+    grid-column: 1 / 2;
+    position: relative;
+}
+
+.mail-input {
+    background: #ffffff;
+    color: #111;
+    border: 1px solid #bfc1c8;
+    border-radius: 6px;
+    padding: 10px 12px;
+    outline: none;
+    width: 100%;
+}
+
+    .mail-input:focus {
+        border-color: #b64cff;
+        box-shadow: 0 0 0 2px rgba(182,76,255,.18);
+    }
+
+    .mail-input.invalid {
+        border-color: #e50000;
+        box-shadow: none;
+    }
+
+.save-confirm {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%,-50%) scale(.96);
+    z-index: 2;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity .18s ease, transform .18s ease;
+    font-size: 18px;
+    font-weight: 700;
+    padding: 10px 16px;
+    border-radius: 14px;
+    color: #fff;
+    background: linear-gradient(#1a1b1f,#1a1b1f) padding-box, linear-gradient(135deg,#ff2d95,#8b2cff) border-box;
+    border: 2px solid transparent;
+    box-shadow: 0 6px 18px rgba(0,0,0,.25);
+}
+
+    .save-confirm.show {
+        opacity: 1;
+        transform: translate(-50%,-50%) scale(1);
+    }
+
+/* Save button */
+.save-btn {
+    grid-column: 2 / 3;
+    margin-left: 8px;
+    width: 44px;
+    height: 44px;
+}
+
+        .save-btn:disabled .save-icon {
+            opacity: .85;
+        }
+
+.save-icon {
+    width: 28px;
+    height: 28px;
+}

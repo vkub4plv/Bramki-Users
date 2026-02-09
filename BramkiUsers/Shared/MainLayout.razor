@@ -1,0 +1,49 @@
+﻿@inherits LayoutComponentBase
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject BramkiUsers.Infrastructure.ICurrentUserService CurrentUser
+
+<PageTitle>Bramki - pracownicy</PageTitle>
+
+<div class="layout">
+    <header class="appbar">
+        <div class="slot-left"></div>
+
+        <a class="brand" href="">
+            <img class="icon-btn" src="icons/BramkiPracownicy.png" alt="Icon" />
+            <span>Bramki - pracownicy</span>
+        </a>
+
+        <div class="slot-right">
+            <AuthorizeView>
+                <Authorized Context="auth">
+                    <div class="who">
+                        <img src="icons/ID.svg" alt="ID" class="icon" />
+                        <span>@auth.User.Identity?.Name</span>
+                    </div>
+                </Authorized>
+                <NotAuthorized>
+                    <div class="who">Nie zalogowano</div>
+                </NotAuthorized>
+            </AuthorizeView>
+        </div>
+    </header>
+
+    <main class="main">
+        @Body
+    </main>
+</div>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthStateTask { get; set; } = default!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthStateTask;
+        if (auth.User?.Identity?.IsAuthenticated == true)
+        {
+            CurrentUser.SetUser(auth.User);
+        }
+    }
+}

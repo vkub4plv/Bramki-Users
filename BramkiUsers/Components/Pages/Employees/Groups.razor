@@ -1,0 +1,195 @@
+﻿@page "/employees/{id:int}/groups"
+@attribute [Authorize(Policy = "GroupsAccess")]
+@using BramkiUsers.ConfigurationQuery
+@using BramkiUsers.Services
+@inject EmployeeState State
+@inject BramkiUsers.Wcf.VisoFacadeShared Viso
+@inject NavigationManager Nav
+@inject IToastService Toasts
+
+<div class="phone-shell">
+    <div class="phone-inner edit-inner">
+        <!-- Header -->
+        <div class="panel-header">
+            <button class="back-btn" @onclick="GoBack" title="Wróć">
+                <img src="icons/Back.svg" alt="Wstecz" class="back-icon" />
+            </button>
+            <div class="panel-title">
+                <img src="icons/Grupy.svg" alt="" class="title-icon" />
+                <span>Grupy</span>
+            </div>
+            <div class="panel-spacer"></div>
+        </div>
+
+        <!-- Body -->
+        <div class="edit-scroll">
+            @if (_loading)
+            {
+                <div style="padding:12px">Ładowanie…</div>
+            }
+            else if (State.User is null)
+            {
+                <div style="padding:12px">Użytkownik nie znaleziony.</div>
+            }
+            else
+            {
+                <ToastHost />
+
+                <!-- 4 readonly fields -->
+                <EmployeeSummaryReadonly Id="@id" />
+
+                <div class="scroll-spacer"></div>
+
+                <!-- Group selector -->
+                <div class="form-grid" style="margin-top:12px">
+                    <label class="field-label" for="grp">Grupa</label>
+
+                    <div class="select-wrap">
+                        <select id="grp" class="select-input"
+                                @bind="_selectedGroupId"
+                                @bind:event="onchange"
+                                disabled="@(!(_groups?.Any() ?? false))">
+                            @if (_groups?.Any() == true)
+                            {
+                                @foreach (var g in _groups)
+                                {
+                                    <option value="@Convert.ToInt32(g.ID)">@g.Name</option>
+                                }
+                            }
+                            else
+                            {
+                                <option>(brak grup)</option>
+                            }
+                        </select>
+                        <span class="select-caret">
+                            <img src="icons/Down.svg" alt="" />
+                        </span>
+                    </div>
+
+                    <!-- Save -->
+                    <div class="cta-wrap" style="grid-column:1 / -1; margin-top:14px">
+                        <button class="gbtn gbtn-border gbtn-cta"
+                                disabled="@(!CanSave || _saving)"
+                                @onclick="SaveAsync">
+                            @(_saving ? "Zapisywanie…" : "Zapisz")
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public int id { get; set; }
+
+    [Inject] private IAudit<Groups> Audit { get; set; } = default!;
+
+    private sealed record GroupsSaveAudit(
+        int EmployeeId,
+        string? ErpId,
+        int? PersonId,
+        int OldGroupId,
+        int NewGroupId
+    );
+
+    private bool _loading = true;
+    private bool _saving = false;
+
+    private List<GroupData> _groups = new();
+    private int? _personId;           // VISO person ID
+    private int _currentGroupId;      // actual VISO group
+    private int _selectedGroupId;     // dropdown binding
+
+    private bool CanSave => _personId is int && _selectedGroupId != _currentGroupId;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+
+        await State.LoadAsync(id); // ensures State.User and ERPID are present
+
+        try
+        {
+            // 1) Load groups (already sorted in facade)
+            _groups = (await Viso.GetAllGroupsAsync()).ToList();
+
+            // 2) Resolve person's current group by ERPID and preselect
+            var erp = State.User?.ErpId;
+            if (!string.IsNullOrWhiteSpace(erp))
+            {
+                var found = await Viso.TryGetPersonAndGroupByErpAsync(erp);
+                if (found is { } pg)
+                {
+                    _personId = pg.personId;
+                    _currentGroupId = pg.groupId;
+                    _selectedGroupId = _currentGroupId;
+                }
+                else
+                {
+                    _personId = null;
+                    _currentGroupId = 0;
+                    _selectedGroupId = 0;
+                    Toasts.Show($"Brak osoby w VISO dla ERPID '{erp}'.", "warn");
+                }
+            }
+            else
+            {
+                Toasts.Show("Brak ERPID w kartotece pracownika.", "warn");
+            }
+        }
+        catch (Exception ex)
+        {
+            Toasts.Show("Błąd ładowania: " + ex.Message, "error");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!CanSave || _personId is not int pid) return;
+
+        var erp = State.User?.ErpId;
+        var input = new GroupsSaveAudit(
+            EmployeeId: id,
+            ErpId: erp,
+            PersonId: pid,
+            OldGroupId: _currentGroupId,
+            NewGroupId: _selectedGroupId
+        );
+
+        using var audit = Audit.Begin(action: "Groups.Save", erpId: erp);
+        audit.LogStart(input);
+
+        _saving = true;
+        try
+        {
+            audit.Info("Updating VISO group for PersonId={PersonId} from GroupId={OldGroupId} to GroupId={NewGroupId}.",
+                pid, _currentGroupId, _selectedGroupId);
+
+            await Viso.UpdatePersonGroupAsync(pid, _selectedGroupId);
+            _currentGroupId = _selectedGroupId;
+
+            audit.Info("VISO group update completed for PersonId={PersonId}, NewGroupId={NewGroupId}.",
+                pid, _currentGroupId);
+
+            Toasts.Show("Zmieniono grupę.", "success", 1500);
+            await Task.Delay(1500);
+            Nav.NavigateTo($"employees/{id}");
+        }
+        catch (Exception ex)
+        {
+            audit.Error(ex, "Error while updating VISO group for PersonId={PersonId}.", pid);
+            Toasts.Show("Błąd zapisu: " + ex.Message, "error");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void GoBack() => Nav.NavigateTo($"employees/{id}");
+}

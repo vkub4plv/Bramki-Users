@@ -1,0 +1,31 @@
+﻿@using BramkiUsers.Services
+@inject IToastService Toasts
+@implements IDisposable
+
+<Toast Message="@_msg" Variant="@_variant" AutoHideMs="@_autoHideMs" @bind-Show="_open" />
+
+@code {
+    private string? _msg;
+    private string _variant = "info";
+    private int _autoHideMs;
+    private bool _open;
+
+    protected override void OnInitialized()
+    {
+        Toasts.OnShow += HandleShow;
+    }
+
+    private void HandleShow(string msg, string variant, int autoHideMs)
+    {
+        _msg = msg;
+        _variant = variant;
+        _autoHideMs = autoHideMs;
+        _open = true;
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Toasts.OnShow -= HandleShow;
+    }
+}

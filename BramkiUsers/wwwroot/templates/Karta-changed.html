@@ -1,0 +1,27 @@
+﻿<p>
+    Nastąpiła zmiana danych pracownika, wymagane jest wydanie nowej karty.
+</p>
+<p>
+    Dane, które zostały zmienione:<br />
+    {{#if firstNameChanged}}<b>Imię:</b> {{OldFirstName}} <span style="color:#888;">&nbsp;&rarr;&nbsp;</span> {{FirstName}}<br />{{/if firstNameChanged}}
+    {{#if lastNameChanged}}<b>Nazwisko:</b> {{OldLastName}} <span style="color:#888;">&nbsp;&rarr;&nbsp;</span> {{LastName}}<br />{{/if lastNameChanged}}
+    {{#if flChanged}}<b>Uprawnienia na wózki:</b> {{OldForklifts}} <span style="color:#888;">&nbsp;&rarr;&nbsp;</span> {{Forklifts}}<br />{{/if flChanged}}
+    {{#if crChanged}}<b>Uprawnienia na suwnice:</b> {{OldCranes}} <span style="color:#888;">&nbsp;&rarr;&nbsp;</span> {{Cranes}}<br />{{/if crChanged}}
+    {{#if gaChanged}}<b>Uprawnienia na żurawie:</b> {{OldGantries}} <span style="color:#888;">&nbsp;&rarr;&nbsp;</span> {{Gantries}}<br />{{/if gaChanged}}
+</p>
+<p>
+    Dane potrzebne do wydania karty:
+</p>
+<p>
+    <b>ERPID:</b> {{ErpId}}<br />
+    <b>Imię:</b> {{FirstName}}<br />
+    <b>Nazwisko:</b> {{LastName}}<br />
+    <b>Dział:</b> {{DepartmentName}}<br />
+    <b>Uprawnienia na wózki:</b> {{Forklifts}}<br />
+    <b>Uprawnienia na suwnice:</b> {{Cranes}}<br />
+    <b>Uprawnienia na żurawie:</b> {{Gantries}}
+</p>
+<p>
+    Po wydrukowaniu karty pamiętaj o jej dodaniu w systemie:<br />
+    http://ApplicationServer/BramkiUsers/employees/{{Id}}
+</p>

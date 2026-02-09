@@ -1,0 +1,61 @@
+﻿@if (Show && !string.IsNullOrWhiteSpace(Message))
+{
+    <div class="toast-panel @CssVariant" role="status" aria-live="polite">
+        <div class="toast-text">@Message</div>
+        <button type="button" class="toast-close" title="Zamknij" @onclick="Close">×</button>
+    </div>
+}
+
+@code {
+    [Parameter] public string? Message { get; set; }
+    [Parameter] public bool Show { get; set; }
+    [Parameter] public EventCallback<bool> ShowChanged { get; set; }
+
+    /// <summary>info | success | warn | error</summary>
+    [Parameter] public string Variant { get; set; } = "info";
+
+    /// <summary>Auto-hide after milliseconds; 0 = don’t auto-hide</summary>
+    [Parameter] public int AutoHideMs { get; set; } = 0;
+
+    private CancellationTokenSource? _cts;
+
+    private string CssVariant => (Variant ?? "info").ToLowerInvariant() switch
+    {
+        "success" => "toast--success",
+        "warn" => "toast--warn",
+        "error" => "toast--error",
+        _ => "toast--info"
+    };
+
+    protected override Task OnParametersSetAsync()
+    {
+        if (Show && AutoHideMs > 0)
+        {
+            _cts?.Cancel();
+            _cts = new();
+            _ = AutoCloseAsync(_cts.Token);
+        }
+        return Task.CompletedTask;
+    }
+
+    private async Task AutoCloseAsync(CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(AutoHideMs, token);
+            if (!token.IsCancellationRequested)
+            {
+                Show = false;
+                await ShowChanged.InvokeAsync(false);
+            }
+        }
+        catch (TaskCanceledException) { /* ignore */ }
+    }
+
+    private async Task Close()
+    {
+        _cts?.Cancel();
+        Show = false;
+        await ShowChanged.InvokeAsync(false);
+    }
+}

@@ -1,0 +1,377 @@
+﻿@page "/employees/{id:int}/fire"
+@attribute [Authorize(Policy = "FireAccess")]
+@using Microsoft.EntityFrameworkCore
+@using BramkiUsers.Data
+@inject NavigationManager Nav
+@inject EmployeeState State
+@inject IDbContextFactory<RaportowanieContext> RapDb
+@inject IDepartmentLookup DeptLookup
+@inject BramkiUsers.Wcf.VisoFacadeShared Viso
+@inject TemplateMailer Mailer
+@inject IToastService Toasts
+
+<div class="phone-shell">
+    <div class="phone-inner edit-inner">
+        <!-- Header (Back | centered title | spacer) -->
+        <div class="panel-header">
+            <button class="back-btn" @onclick="GoBack" title="Wróć">
+                <img src="icons/Back.svg" alt="Wstecz" class="back-icon" />
+            </button>
+
+            <div class="panel-title">
+                <img src="icons/Zwalnianie.svg" alt="" class="title-icon" />
+                <span>Zwalnianie</span>
+            </div>
+
+            <div class="panel-spacer"></div>
+        </div>
+
+        <!-- Body -->
+        <div class="edit-scroll">
+            @if (_loading)
+            {
+                <div style="padding:12px">Ładowanie…</div>
+            }
+            else if (State.User is null)
+            {
+                <div style="padding:12px">Użytkownik nie znaleziony.</div>
+            }
+            else
+            {
+                <ToastHost />
+                <!-- 4 readonly fields -->
+                <EmployeeSummaryReadonly Id="@id" />
+
+                @if (_needsPrompt)
+                {
+                    <GatesDataPrompt @bind-Forklifts="_forklifts"
+                                     @bind-Cranes="_cranes"
+                                     @bind-Gantries="_gantries" />
+                }
+
+                <div class="scroll-spacer"></div>
+
+                <!-- CTA -->
+                <div class="form-grid" style="margin-top:12px">
+                    <div class="cta-wrap">
+                        <button class="gbtn gbtn-border gbtn-cta"
+                                disabled="@_busy"
+                                @onclick="FireAsync">
+                            @(_busy ? "Przetwarzanie…" : "Zwolnij")
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public int id { get; set; }
+
+    [Inject] private IAudit<Fire> Audit { get; set; } = default!;
+
+    private sealed record FireInputAudit(
+        int EmployeeId,
+        string? ErpId,
+        string FirstName,
+        string LastName,
+        bool HadMainCard,
+        string? CardNumber,
+        string? CardNumber2,
+        string? LunchCardNumber,
+        string? PpeStorageCabinetsCardNumber,
+        bool GateProvidedData,
+        bool Forklifts,
+        bool Cranes,
+        bool Gantries
+    );
+
+    private bool _loading = true;
+    private bool _busy = false;
+
+    // prompt state
+    private bool _needsPrompt = false;
+    private bool _forklifts = false;
+    private bool _cranes = false;
+    private bool _gantries = false;
+
+    private string FirstName = "";
+    private string LastName = "";
+
+    private static (string First, string Last) SplitName(string? full)
+    {
+        var n = (full ?? "").Trim();
+        if (n.Length == 0) return ("", "");
+        var i = n.LastIndexOf(' ');
+        if (i <= 0 || i == n.Length - 1) return (n, "");
+        return (n[..i], n[(i + 1)..]);
+    }
+
+    private static string? ToLunchCard(string? dec)
+    {
+        if (string.IsNullOrWhiteSpace(dec)) return null;
+
+        // Accept big values; use the low 32 bits for the lunch mapping
+        if (!ulong.TryParse(dec, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v))
+            return null;
+
+        uint low32 = (uint)(v & 0xFFFFFFFFUL);
+        uint reversed = BinaryPrimitives.ReverseEndianness(low32);
+        return reversed.ToString("D10", CultureInfo.InvariantCulture);
+    }
+
+    private static string? ToPpeStorageCabinetsCard(string? dec)
+    {
+        if (string.IsNullOrWhiteSpace(dec)) return null;
+
+        // Accept big values; use the low 32 bits for the PpeStorageCabinets mapping
+        if (!ulong.TryParse(dec, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v))
+            return null;
+
+        uint low32 = (uint)(v & 0xFFFFFFFFUL);
+        uint reversed = BinaryPrimitives.ReverseEndianness(low32);
+        return reversed.ToString("X8", CultureInfo.InvariantCulture); // HEX
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        await DeptLookup.EnsureLoadedAsync();
+        await State.LoadAsync(id); // ensure State.User & Gate
+
+        _needsPrompt = State.Gate?.ProvidedData != true; // show if false or null
+        _forklifts = State.Gate?.Forklifts == true;
+        _cranes = State.Gate?.Cranes == true;
+        _gantries = State.Gate?.Gantries == true;
+
+        _loading = false;
+    }
+
+    private async Task FireAsync()
+    {
+        if (_busy) return;
+
+        var erpRaw = State.User?.ErpId?.Trim();
+        var hadMainCard = !string.IsNullOrWhiteSpace(State.User?.CardNumber);
+        var lunchCardNumber = ToLunchCard(State.User?.CardNumber);
+        var ppeStorageCabinetsCardNumber = ToPpeStorageCabinetsCard(State.User?.CardNumber);
+        var cardNumber = State.User?.CardNumber;
+        var cardNumber2 = State.User?.CardNumber2;
+        (FirstName, LastName) = SplitName(State.User?.Name);
+
+        var input = new FireInputAudit(
+            EmployeeId: id,
+            ErpId: erpRaw,
+            FirstName: FirstName,
+            LastName: LastName,
+            HadMainCard: hadMainCard,
+            CardNumber: cardNumber,
+            CardNumber2: cardNumber2,
+            LunchCardNumber: lunchCardNumber,
+            PpeStorageCabinetsCardNumber: ppeStorageCabinetsCardNumber,
+            GateProvidedData: State.Gate?.ProvidedData == true,
+            Forklifts: State.Gate?.Forklifts == true,
+            Cranes: State.Gate?.Cranes == true,
+            Gantries: State.Gate?.Gantries == true
+        );
+
+        using var audit = Audit.Begin(action: "Fire", erpId: erpRaw);
+        audit.LogStart(input);
+
+        if (string.IsNullOrWhiteSpace(erpRaw))
+        {
+            audit.Warn("Cannot fire employee: ERPID missing in State.User.");
+            Toasts.Show("Brak numeru ERP w kartotece.", "warn");
+            return;
+        }
+
+        var erp = erpRaw;
+
+        _busy = true;
+        try
+        {
+            // ---- 0) If gates data missing, persist forklifts/cranes and mark ProvidedData=1
+            if (_needsPrompt)
+            {
+                try
+                {
+                    audit.Info("Gates data missing; persisting forklifts/cranes/gantries before fire. UserId={UserId}.",
+                        State.User!.Id);
+
+                    await using var db0 = await RapDb.CreateDbContextAsync();
+                    var uid = State.User!.Id;
+
+                    var gate = await db0.DGates.SingleOrDefaultAsync(g => g.DUserId == uid);
+                    if (gate is null)
+                    {
+                        gate = new DGate { DUserId = uid };
+                        db0.DGates.Add(gate);
+                    }
+
+                    gate.Forklifts = _forklifts;
+                    gate.Cranes = _cranes;
+                    gate.Gantries = _gantries;
+                    gate.ProvidedData = true;
+
+                    await db0.SaveChangesAsync();
+
+                    // reflect in memory for email logic below
+                    if (State.Gate != null)
+                    {
+                        State.Gate.Forklifts = _forklifts;
+                        State.Gate.Cranes = _cranes;
+                        State.Gate.Gantries = _gantries;
+                        State.Gate.ProvidedData = true;
+                    }
+                    _needsPrompt = false;
+
+                    audit.Info("Gates data persisted successfully for UserId={UserId}.", State.User!.Id);
+                }
+                catch (Exception ex)
+                {
+                    audit.Error(ex, "Error while saving gates data before fire for ErpId={ErpId}.", erp);
+                    Toasts.Show("Błąd zapisu danych uprawnień: " + ex.Message, "error");
+                    return;
+                }
+            }
+
+            // ---- 1) Raportowanie: clear cards + deactivate user ----
+            audit.Info("Raportowanie: clearing cards and deactivating user ErpId={ErpId}.", erp);
+
+            await using (var db = await RapDb.CreateDbContextAsync())
+            {
+                var user = await db.DUsers.SingleOrDefaultAsync(u => u.ErpId == erp);
+                if (user is null)
+                    throw new InvalidOperationException($"Brak użytkownika w bazie (ERPID {erp}).");
+
+                user.CardNumber = string.Empty;
+                user.CardNumber2 = string.Empty;
+                user.IsActive = false;
+                user.ModifiedOn = DateTime.Now;
+
+                await db.SaveChangesAsync();
+            }
+
+            audit.Info("Raportowanie: user deactivated and cards cleared for ErpId={ErpId}.", erp);
+
+            // ---- 2) VISO: delete person (with safety net for replacement card) + sync ----
+            try
+            {
+                audit.Info("VISO: deleting person ErpId={ErpId}.", erp);
+                await Viso.DeletePersonByErpAsync(erp);
+                audit.Info("VISO: delete person completed for ErpId={ErpId}.", erp);
+            }
+            catch (Exception ex)
+            {
+                audit.Error(ex, "Error while deleting person from VISO for ErpId={ErpId}.", erp);
+                Toasts.Show("Błąd usuwania w VISO: " + ex.Message, "error");
+            }
+
+            // ---- 3) Emails (-fire suffix by gates) ----
+
+            string? deptName = null;
+            if (DeptLookup.TryGetInfo(State.User?.DepartmentId, out var dInfo))
+                deptName = dInfo.Name;
+
+            var g = State.Gate;
+
+            // PPE cabinets – only if user had a main card
+            if (g?.PpeStorageCabinets == true && hadMainCard)
+            {
+                audit.Info("Sending 'SzafyŚOI-fire' e-mail for ErpId={ErpId}.", erp);
+
+                await Mailer.SendAsync("SzafyŚOI-fire", new
+                {
+                    ErpId = erp,
+                    FirstName = FirstName.Trim(),
+                    LastName = LastName.Trim(),
+                    DepartmentName = deptName,
+                    PpeStorageCabinetsCardNumber = ppeStorageCabinetsCardNumber
+                });
+            }
+
+            // Lunch – both recipients, only if user had a main card
+            if (g?.Lunch == true && hadMainCard)
+            {
+                audit.Info("Sending lunch '-fire' e-mails for ErpId={ErpId}.", erp);
+
+                await Mailer.SendAsync("Obiady-fire", new
+                {
+                    ErpId = erp,
+                    FirstName = FirstName.Trim(),
+                    LastName = LastName.Trim(),
+                    DepartmentName = deptName,
+                    CardNumber = cardNumber
+                });
+                await Mailer.SendAsync("Obiady2-fire", new
+                {
+                    ErpId = erp,
+                    FirstName = FirstName.Trim(),
+                    LastName = LastName.Trim(),
+                    LunchCardNumber = lunchCardNumber
+                });
+            }
+
+            // Forklifts – only if user had a main card
+            if (g?.Forklifts == true && hadMainCard)
+            {
+                audit.Info("Sending 'Wózki-fire' e-mail for ErpId={ErpId}.", erp);
+
+                await Mailer.SendAsync("Wózki-fire", new
+                {
+                    ErpId = erp,
+                    FirstName = FirstName.Trim(),
+                    LastName = LastName.Trim(),
+                    DepartmentName = deptName,
+                    CardNumber2 = cardNumber2
+                });
+            }
+
+            // Quality base – ALWAYS (when gate is true), regardless of card presence
+            if (g?.QualityTraining == true)
+            {
+                audit.Info("Sending 'BazaJakości-fire' e-mail for ErpId={ErpId}.", erp);
+
+                await Mailer.SendAsync("BazaJakości-fire", new
+                {
+                    ErpId = erp,
+                    FirstName = FirstName.Trim(),
+                    LastName = LastName.Trim(),
+                    DepartmentName = deptName
+                });
+            }
+
+            // Szafki - except for specific department if they don't use lockers
+            if (State.User?.DepartmentId != 2)
+            {
+                audit.Info("Sending 'Szafki-fire' e-mail for ErpId={ErpId}.", erp);
+
+                await Mailer.SendAsync("Szafki-fire", new
+                {
+                    ErpId = erp,
+                    FirstName = FirstName.Trim(),
+                    LastName = LastName.Trim(),
+                    DepartmentName = deptName
+                });
+            }
+
+            audit.Info("Fire completed for ErpId={ErpId}. Redirecting user.", erp);
+
+            Toasts.Show("Zwolniono pracownika.", "success", 1500);
+            await Task.Delay(1500);
+            Nav.NavigateTo(Nav.BaseUri);
+        }
+        catch (Exception ex)
+        {
+            audit.Error(ex, "Unexpected error while firing employee ErpId={ErpId}.", erp);
+            Toasts.Show("Błąd podczas zwalniania: " + ex.Message, "error");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void GoBack() => Nav.NavigateTo($"employees/{id}");
+}

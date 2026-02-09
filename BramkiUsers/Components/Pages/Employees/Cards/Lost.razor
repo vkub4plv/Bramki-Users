@@ -1,0 +1,249 @@
+﻿@page "/employees/{id:int}/cards/lost"
+@attribute [Authorize(Policy = "CardsLostAccess")]
+@using Microsoft.EntityFrameworkCore
+@using BramkiUsers.Data
+@inject NavigationManager Nav
+@inject EmployeeState State
+@inject TemplateMailer Mailer
+@inject IDepartmentLookup DeptLookup
+@inject IDbContextFactory<RaportowanieContext> DbFactory
+@inject IToastService Toasts
+
+<div class="phone-shell">
+    <div class="phone-inner edit-inner">
+        <!-- Header (Back | centered title | spacer) -->
+        <div class="panel-header">
+            <button class="back-btn" @onclick="GoBack" title="Wróć">
+                <img src="icons/Back.svg" alt="Wstecz" class="back-icon" />
+            </button>
+
+            <div class="panel-title">
+                <img src="icons/ZgubioneKarty.svg" alt="" class="title-icon" />
+                <span>Zgubione karty</span>
+            </div>
+
+            <div class="panel-spacer"></div>
+        </div>
+
+        <!-- Body -->
+        <div class="edit-scroll">
+            @if (_loading)
+            {
+                <div style="padding:12px">Ładowanie…</div>
+            }
+            else if (State.User is null)
+            {
+                <div style="padding:12px">Użytkownik nie znaleziony.</div>
+            }
+            else
+            {
+                <ToastHost />
+                <!-- 4 readonly fields -->
+                <EmployeeSummaryReadonly Id="@id" />
+
+                <!-- Missing gates data prompt -->
+                @if (_needsPrompt)
+                {
+                    <GatesDataPrompt @bind-Forklifts="_forklifts"
+                                     @bind-Cranes="_cranes"
+                                     @bind-Gantries="_gantries" />
+                }
+
+                <div class="scroll-spacer"></div>
+
+                <!-- CTA -->
+                <div class="form-grid" style="margin-top:12px">
+                    <div class="cta-wrap">
+                        <button class="gbtn gbtn-border gbtn-cta"
+                                disabled="@(_busy || _warnedOnce)"
+                                @onclick="ReportLostAsync">
+                            @(_busy ? "Przetwarzanie…" : "Zgłoś")
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public int id { get; set; }
+
+    [Inject] private IAudit<Lost> Audit { get; set; } = default!;
+
+    private sealed record LostCardAudit(
+        int EmployeeId,
+        string? ErpId,
+        bool HasMainCard,
+        bool NeedsPrompt,
+        bool Forklifts,
+        bool Cranes,
+        bool Gantries
+    );
+
+    private bool _loading = true;
+    private bool _busy = false;
+
+    // prompt state (only used if DGates.ProvidedData == false)
+    private bool _needsPrompt = false;
+    private bool _forklifts = false;
+    private bool _cranes = false;
+    private bool _gantries = false;
+
+    private bool _hasMainCard = false;
+    private bool _warnedOnce = false;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        await State.LoadAsync(id);            // ensure State.User / State.Gate
+        await DeptLookup.EnsureLoadedAsync(); // for DepartmentName lookup
+
+        _needsPrompt = State.Gate?.ProvidedData != true;   // null/false => show
+
+        // seed editable values from DB (ignored if !_needsPrompt)
+        _forklifts = State.Gate?.Forklifts == true;
+        _cranes = State.Gate?.Cranes == true;
+        _gantries = State.Gate?.Gantries == true;
+
+        // Allow reporting only if the user has a main card
+        _hasMainCard = !string.IsNullOrWhiteSpace(State.User?.CardNumber);
+
+        _loading = false;
+    }
+
+    private async Task ReportLostAsync()
+    {
+        if (_busy) return;
+
+        var erp = State.User?.ErpId;
+
+        var input = new LostCardAudit(
+            EmployeeId: id,
+            ErpId: erp,
+            HasMainCard: _hasMainCard,
+            NeedsPrompt: _needsPrompt,
+            Forklifts: _forklifts,
+            Cranes: _cranes,
+            Gantries: _gantries
+        );
+
+        using var audit = Audit.Begin(action: "Cards.Lost", erpId: erp);
+        audit.LogStart(input);
+
+        if (!_hasMainCard)
+        {
+            audit.Warn("Cannot report lost card: user has no main card assigned. ErpId={ErpId}.", erp);
+            Toasts.Show("Brak przypisanej karty – zgłoszenie niemożliwe.", "warn");
+            _warnedOnce = true;
+            return;
+        }
+        if (State.User is null)
+        {
+            audit.Warn("Cannot report lost card: State.User is null for EmployeeId={EmployeeId}.", id);
+            Toasts.Show("Użytkownik nie znaleziony.", "warn");
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            if (_needsPrompt)
+            {
+                try
+                {
+                    audit.Info("Gates data missing; persisting forklifts/cranes/gantries before lost card report. UserId={UserId}.",
+                        State.User.Id);
+
+                    await using var db = await DbFactory.CreateDbContextAsync();
+                    var uid = State.User.Id;
+
+                    var gate = await db.DGates.SingleOrDefaultAsync(g => g.DUserId == uid);
+                    if (gate is null)
+                    {
+                        gate = new DGate { DUserId = uid };
+                        db.DGates.Add(gate);
+                    }
+
+                    gate.Forklifts = _forklifts;
+                    gate.Cranes = _cranes;
+                    gate.Gantries = _gantries;
+                    gate.ProvidedData = true;
+
+                    await db.SaveChangesAsync();
+
+                    if (State.Gate != null)
+                    {
+                        State.Gate.Forklifts = _forklifts;
+                        State.Gate.Cranes = _cranes;
+                        State.Gate.Gantries = _gantries;
+                        State.Gate.ProvidedData = true;
+                    }
+
+                    _needsPrompt = false;
+
+                    audit.Info("Gates data persisted successfully before lost card report. UserId={UserId}.", State.User.Id);
+                }
+                catch (Exception ex)
+                {
+                    audit.Error(ex, "Error while saving gates data before lost card report for ErpId={ErpId}.", erp);
+                    Toasts.Show("Błąd zapisu danych uprawnień: " + ex.Message, "error");
+                    return;
+                }
+            }
+
+            // Prepare email payload (use updated flags)
+            var erpNonNull = State.User.ErpId ?? "";
+            var (first, last) = SplitName(State.User.Name);
+
+            var deptName = DeptLookup.TryGetInfo(State.User.DepartmentId, out var info)
+                ? info.Name
+                : "";
+
+            var forklifts = (State.Gate?.Forklifts == true) ? "Tak" : "Nie";
+            var cranes = (State.Gate?.Cranes == true) ? "Tak" : "Nie";
+            var gantries = (State.Gate?.Gantries == true) ? "Tak" : "Nie";
+            var userId = State.User.Id;
+
+            audit.Info("Sending 'Karta-lost' e-mail for ErpId={ErpId}.", erpNonNull);
+
+            await Mailer.SendAsync("Karta-lost", new
+            {
+                ErpId = erpNonNull,
+                FirstName = first,
+                LastName = last,
+                DepartmentName = deptName,
+                Forklifts = forklifts,
+                Cranes = cranes,
+                Gantries = gantries,
+                Id = userId
+            });
+
+            audit.Info("Lost card e-mail sent for ErpId={ErpId}.", erpNonNull);
+
+            Toasts.Show("Zgłoszono zagubioną kartę.", "success", 1500);
+            await Task.Delay(1500);
+            Nav.NavigateTo($"employees/{id}/cards");
+        }
+        catch (Exception ex)
+        {
+            audit.Error(ex, "Error while sending lost card e-mail for ErpId={ErpId}.", erp);
+            Toasts.Show("Błąd wysyłki e-mail: " + ex.Message, "error");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static (string First, string Last) SplitName(string? full)
+    {
+        var n = (full ?? "").Trim();
+        if (n.Length == 0) return ("", "");
+        var i = n.LastIndexOf(' ');
+        if (i <= 0 || i == n.Length - 1) return (n, "");
+        return (n[..i], n[(i + 1)..]);
+    }
+
+    private void GoBack() => Nav.NavigateTo($"employees/{id}/cards");
+}

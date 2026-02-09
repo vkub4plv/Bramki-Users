@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="800px" height="800px" viewBox="0 0 24 24">
+  <defs>
+    <!-- Global diagonal gradient (with CSS-variable overrides) -->
+    <linearGradient id="globalGradient" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ff0057" />
+      <stop offset="100%" stop-color="#bd00ff" />
+    </linearGradient>
+
+    <!-- Mask built from the asterisk strokes -->
+    <mask id="shapesMask" maskUnits="userSpaceOnUse">
+      <rect x="0" y="0" width="24" height="24" fill="black"/>
+      <path d="M12 4V20M19 7L5 17M5 7L19 17"
+            stroke="white" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"/>
+    </mask>
+  </defs>
+
+  <!-- Transparent background -->
+  <rect x="0" y="0" width="24" height="24" fill="none"/>
+
+  <!-- Gradient rectangle masked by the asterisk -->
+  <rect x="0" y="0" width="24" height="24" fill="url(#globalGradient)" mask="url(#shapesMask)"/>
+</svg>

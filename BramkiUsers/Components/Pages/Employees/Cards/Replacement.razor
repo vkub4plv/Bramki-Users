@@ -1,0 +1,267 @@
+﻿@page "/employees/{id:int}/cards/replacement"
+@attribute [Authorize(Policy = "CardsReplacementAccess")]
+@using BramkiUsers.ConfigurationQuery
+@using BramkiUsers.Services
+@inject NavigationManager Nav
+@inject EmployeeState State
+@inject BramkiUsers.Wcf.VisoFacadeShared Viso
+@inject IToastService Toasts
+
+<div class="phone-shell">
+    <div class="phone-inner edit-inner">
+        <!-- Header (Back | centered title | spacer) -->
+        <div class="panel-header">
+            <button class="back-btn" @onclick="GoBack" title="Wróć">
+                <img src="icons/Back.svg" alt="Wstecz" class="back-icon" />
+            </button>
+
+            <div class="panel-title">
+                <img src="icons/ID.svg" alt="" class="title-icon" />
+                <span>Kart zastępcze</span>
+            </div>
+
+            <div class="panel-spacer"></div>
+        </div>
+
+        <!-- Body -->
+        <div class="edit-scroll">
+            @if (_loading)
+            {
+                <div style="padding:12px">Ładowanie…</div>
+            }
+            else if (State.User is null)
+            {
+                <div style="padding:12px">Użytkownik nie znaleziony.</div>
+            }
+            else
+            {
+                <ToastHost />
+                <!-- 4 readonly fields -->
+                <EmployeeSummaryReadonly Id="@id" />
+
+                <div class="scroll-spacer"></div>
+
+                <div class="form-grid" style="margin-top:12px">
+                    <!-- Card number (digits only); becomes readonly when a "Zastępcza" credential is present -->
+                    <label class="field-label" for="card">Numer karty</label>
+                    <input id="card" class="text-input"
+                           inputmode="numeric" pattern="\d*" title="Tylko cyfry"
+                           @bind="CardNumber" @bind:event="oninput"
+                           readonly="@_cardReadonly" />
+
+                    <!-- CTA -->
+                    <div class="cta-wrap" style="grid-column:1 / -1; margin-top:14px">
+                        <button class="gbtn gbtn-border gbtn-cta"
+                                disabled="@_busy"
+                                @onclick="OnActionAsync">
+                            @(_busy
+                                                    ? "Przetwarzanie…"
+                                                    : (_hasReplacement ? "Usuń" : "Przypisz"))
+                    </button>
+                </div>
+            </div>
+                        }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public int id { get; set; }
+
+    [Inject] private IAudit<Replacement> Audit { get; set; } = default!;
+
+    private sealed record ReplacementCardAudit(
+        int EmployeeId,
+        string? ErpId,
+        int PersonId,
+        bool HasReplacement,
+        int? ReplacementCredentialId,
+        string CardNumberInput
+    );
+
+    private bool _loading = true;
+    private bool _busy = false;
+
+    private int? _personId;
+    private bool _hasReplacement;
+    private int? _replacementCredentialId;
+    private bool _cardReadonly;
+
+    private string _cardNumber = "";
+    private static string Digits(string? s) => new string((s ?? "").Where(char.IsDigit).ToArray());
+    private string CardNumber
+    {
+        get => _cardNumber;
+        set
+        {
+            if (_cardReadonly) return;
+            _cardNumber = new string((value ?? "").Where(char.IsDigit).ToArray());
+        }
+    }
+
+    private void OnCardInput(string? v)
+    {
+        if (_cardReadonly) return;
+        _cardNumber = Digits(v);
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+
+        await State.LoadAsync(id); // ensures State.User (& Gate) are populated
+
+        try
+        {
+            var erp = State.User?.ErpId;
+            if (string.IsNullOrWhiteSpace(erp))
+            {
+                Toasts.Show("Brak ERPID w kartotece pracownika.", "warn");
+                return;
+            }
+
+            var pg = await Viso.TryGetPersonAndGroupByErpAsync(erp);
+            if (pg is null)
+            {
+                Toasts.Show($"Brak osoby w VISO dla ERPID '{erp}'.", "warn");
+                return;
+            }
+
+            _personId = pg.Value.personId;
+
+            // Load all credentials for this person and look for one containing "Zastępcza"
+            var creds = await Viso.GetPersonCredentialsAsync(_personId.Value);
+            var repl = creds.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Name) &&
+                                                 c.Name.IndexOf("Zastępcza", StringComparison.OrdinalIgnoreCase) >= 0);
+
+            if (repl is not null)
+            {
+                _hasReplacement = true;
+                _replacementCredentialId = repl.ID;
+
+                // Load factor and show its value; lock the textbox
+                var factors = await Viso.GetFactorsByCredentialIdAsync(repl.ID);
+                var f = factors.FirstOrDefault();
+                _cardNumber = Digits(f?.Value);
+                _cardReadonly = true;
+            }
+            else
+            {
+                // No replacement credential yet -> allow typing the card number
+                _hasReplacement = false;
+                _replacementCredentialId = null;
+                _cardNumber = "";
+                _cardReadonly = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Toasts.Show("Błąd ładowania: " + ex.Message, "error");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static string NormalizeDec(string? s)
+    {
+        var d = Digits(s);
+        var nz = d.TrimStart('0');
+        return nz.Length == 0 ? "0" : nz; // treat "0000" as "0"
+    }
+
+    private async Task OnActionAsync()
+    {
+        if (_personId is not int pid) return;
+
+        var erp = State.User?.ErpId;
+
+        var input = new ReplacementCardAudit(
+            EmployeeId: id,
+            ErpId: erp,
+            PersonId: pid,
+            HasReplacement: _hasReplacement,
+            ReplacementCredentialId: _replacementCredentialId,
+            CardNumberInput: _cardNumber
+        );
+
+        using var audit = Audit.Begin(action: "Cards.Replacement", erpId: erp);
+        audit.LogStart(input);
+
+        _busy = true;
+        try
+        {
+            if (_hasReplacement)
+            {
+                audit.Info("Removing replacement card for ErpId={ErpId}, PersonId={PersonId}, CredentialId={CredentialId}.",
+                    erp, pid, _replacementCredentialId);
+
+                // Usuń -> unassign only (keep the credential in the system)
+                if (_replacementCredentialId is int cid)
+                {
+                    await Viso.UnassignCredentialFromPersonAsync(pid, cid);
+                    Toasts.Show("Usunięto kartę zastępczą.", "success", 1500);
+                }
+
+                // Reset UI to "no replacement" state
+                _hasReplacement = false;
+                _replacementCredentialId = null;
+                _cardNumber = "";
+                _cardReadonly = false;
+
+                audit.Info("Replacement card removed for ErpId={ErpId}, PersonId={PersonId}.", erp, pid);
+            }
+            else
+            {
+                // Przypisz -> need a digits-only card number (ignore leading 0s)
+                var dec = NormalizeDec(_cardNumber);
+                if (string.IsNullOrWhiteSpace(dec))
+                {
+                    audit.Warn("Validation failed: empty replacement card number for ErpId={ErpId}, PersonId={PersonId}.", erp, pid);
+                    Toasts.Show("Podaj numer karty (tylko cyfry).", "warn");
+                    return;
+                }
+
+                audit.Info("Looking up unassigned replacement credential by DEC={Dec} for ErpId={ErpId}, PersonId={PersonId}.",
+                    dec, erp, pid);
+
+                // Find an existing credential by card DEC and assign it to this person
+                var credId = await Viso.FindUnassignedReplacementCredentialIdByCardDecAsync(dec);
+                if (credId is not int cid || cid <= 0)
+                {
+                    audit.Warn("No unassigned replacement credential found for DEC={Dec}.", dec);
+                    Toasts.Show("Nie znaleziono karty o podanym numerze.", "error");
+                    return;
+                }
+
+                await Viso.AssignExistingCredentialToPersonAsync(pid, cid);
+                Toasts.Show("Przypisano kartę zastępczą.", "success", 1500);
+
+                // Refresh current state to lock the field and flip button to "Usuń"
+                _hasReplacement = true;
+                _replacementCredentialId = cid;
+                _cardReadonly = true;
+
+                // Try to reload factor value for display
+                var factors = await Viso.GetFactorsByCredentialIdAsync(cid);
+                var f = factors.FirstOrDefault();
+                _cardNumber = Digits(f?.Value);
+
+                audit.Info("Replacement card assigned CredentialId={CredentialId} for ErpId={ErpId}, PersonId={PersonId}.",
+                    cid, erp, pid);
+            }
+        }
+        catch (Exception ex)
+        {
+            audit.Error(ex, "Error while processing replacement card for ErpId={ErpId}, PersonId={PersonId}.", erp, pid);
+            Toasts.Show("Błąd: " + ex.Message, "error");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void GoBack() => Nav.NavigateTo($"employees/{id}/cards");
+}

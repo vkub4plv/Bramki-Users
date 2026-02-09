@@ -1,0 +1,66 @@
+﻿@page "/"
+@attribute [Authorize]
+
+<div class="phone-shell">
+    <div class="phone-content">
+        <!-- Hire -->
+        <AuthorizeView Policy="HireAccess">
+            <Authorized>
+                <a href="hiring" class="menu-tile">
+                    <span class="tile-icon">
+                        <img src="icons/Zatrudnianie.svg" alt="Zatrudnianie" class="inline-svg" />
+                    </span>
+                    <span class="tile-title">Zatrudnianie</span>
+                </a>
+            </Authorized>
+            <NotAuthorized>
+                <div class="menu-tile disabled" aria-disabled="true">
+                    <span class="tile-icon">
+                        <img src="icons/Zatrudnianie-disabled.svg" alt="Zatrudnianie-disabled" class="inline-svg" />
+                    </span>
+                    <span class="tile-title">Zatrudnianie</span>
+                </div>
+            </NotAuthorized>
+        </AuthorizeView>
+
+        <!-- Employees -->
+        <AuthorizeView Policy="EmployeesAccess">
+            <Authorized>
+                <a href="employees" class="menu-tile">
+                    <span class="tile-icon">
+                        <img src="icons/Pracownicy.svg" alt="Pracownicy" class="inline-svg" />
+                    </span>
+                    <span class="tile-title">Pracownicy</span>
+                </a>
+            </Authorized>
+            <NotAuthorized>
+                <div class="menu-tile disabled" aria-disabled="true">
+                    <span class="tile-icon">
+                        <img src="icons/Pracownicy-disabled.svg" alt="Pracownicy-disabled" class="inline-svg" />
+                    </span>
+                    <span class="tile-title">Pracownicy</span>
+                </div>
+            </NotAuthorized>
+        </AuthorizeView>
+
+        <!-- Emails -->
+        <AuthorizeView Policy="EmailsAccess">
+            <Authorized>
+                <a href="emails" class="menu-tile">
+                    <span class="tile-icon">
+                        <img src="icons/E-Mail.svg" alt="E-Mail" class="inline-svg" />
+                    </span>
+                    <span class="tile-title">E-Maile</span>
+                </a>
+            </Authorized>
+            <NotAuthorized>
+                <div class="menu-tile disabled" aria-disabled="true">
+                    <span class="tile-icon">
+                        <img src="icons/E-Mail-disabled.svg" alt="E-Mail-disabled" class="inline-svg" />
+                    </span>
+                    <span class="tile-title">E-Maile</span>
+                </div>
+            </NotAuthorized>
+        </AuthorizeView>
+    </div>
+</div>

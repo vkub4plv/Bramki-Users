@@ -1,0 +1,125 @@
+﻿@page "/employees/{id:int}"
+@attribute [Authorize(Policy = "EmployeesAccess")]
+@inject NavigationManager Nav
+@inject EmployeeState State
+
+@code {
+    [Parameter] public int id { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await State.LoadAsync(id);
+        if (State.User is null)
+            Nav.NavigateTo("employees", true); // stale link -> back to list
+    }
+
+    private void BackToList() => Nav.NavigateTo("employees");
+}
+
+<div class="phone-shell">
+    <div class="phone-inner">
+        <!-- Header (Back left, centered title, spacer right) -->
+        <div class="panel-header">
+            <button class="back-btn" @onclick="BackToList" title="Wróć">
+                <img src="icons/Back.svg" alt="Wstecz" class="back-icon" />
+            </button>
+
+            <!-- Center stays "Pracownicy" with icon -->
+            <div class="panel-title">
+                <img src="icons/Pracownicy.svg" alt="" class="title-icon" />
+                <span>Pracownicy</span>
+            </div>
+
+            <!-- Right shows the current user's name -->
+            <div class="panel-right">
+                @if (State.User is not null)
+                {
+                    <span class="emp-name">@State.User.Name</span>
+                }
+            </div>
+        </div>
+
+        <!-- Tiles -->
+        <div class="phone-content">
+            <!-- Edycja danych -->
+            <AuthorizeView Policy="EditAccess">
+                <Authorized>
+                    <a href="@($"employees/{id}/edit")" class="menu-tile">
+                        <span class="tile-icon">
+                            <img src="icons/EdycjaDanych.svg" alt="Edycja danych" class="inline-svg" />
+                        </span>
+                        <span class="tile-title">Edycja danych</span>
+                    </a>
+                </Authorized>
+                <NotAuthorized>
+                    <div class="menu-tile disabled" aria-disabled="true">
+                        <span class="tile-icon">
+                            <img src="icons/EdycjaDanych-disabled.svg" alt="Edycja danych (brak dostępu)" class="inline-svg" />
+                        </span>
+                        <span class="tile-title">Edycja danych</span>
+                    </div>
+                </NotAuthorized>
+            </AuthorizeView>
+
+            <!-- Zwalnianie -->
+            <AuthorizeView Policy="FireAccess">
+                <Authorized>
+                    <a href="@($"employees/{id}/fire")" class="menu-tile">
+                        <span class="tile-icon">
+                            <img src="icons/Zwalnianie.svg" alt="Zwalnianie" class="inline-svg" />
+                        </span>
+                        <span class="tile-title">Zwalnianie</span>
+                    </a>
+                </Authorized>
+                <NotAuthorized>
+                    <div class="menu-tile disabled" aria-disabled="true">
+                        <span class="tile-icon">
+                            <img src="icons/Zwalnianie-disabled.svg" alt="Zwalnianie (brak dostępu)" class="inline-svg" />
+                        </span>
+                        <span class="tile-title">Zwalnianie</span>
+                    </div>
+                </NotAuthorized>
+            </AuthorizeView>
+
+            <!-- Karty -->
+            <AuthorizeView Policy="CardsMenuAccess">
+                <Authorized>
+                    <a href="@($"employees/{id}/cards")" class="menu-tile">
+                        <span class="tile-icon">
+                            <img src="icons/Karty.svg" alt="Karty" class="inline-svg" />
+                        </span>
+                        <span class="tile-title">Karty</span>
+                    </a>
+                </Authorized>
+                <NotAuthorized>
+                    <div class="menu-tile disabled" aria-disabled="true">
+                        <span class="tile-icon">
+                            <img src="icons/Karty-disabled.svg" alt="Karty (brak dostępu)" class="inline-svg" />
+                        </span>
+                        <span class="tile-title">Karty</span>
+                    </div>
+                </NotAuthorized>
+            </AuthorizeView>
+
+            <!-- Grupy -->
+            <AuthorizeView Policy="GroupsAccess">
+                <Authorized>
+                    <a href="@($"employees/{id}/groups")" class="menu-tile">
+                        <span class="tile-icon">
+                            <img src="icons/Grupy.svg" alt="Grupy" class="inline-svg" />
+                        </span>
+                        <span class="tile-title">Grupy</span>
+                    </a>
+                </Authorized>
+                <NotAuthorized>
+                    <div class="menu-tile disabled" aria-disabled="true">
+                        <span class="tile-icon">
+                            <img src="icons/Grupy-disabled.svg" alt="Grupy (brak dostępu)" class="inline-svg" />
+                        </span>
+                        <span class="tile-title">Grupy</span>
+                    </div>
+                </NotAuthorized>
+            </AuthorizeView>
+        </div>
+    </div>
+</div>

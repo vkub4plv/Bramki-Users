@@ -1,0 +1,110 @@
+﻿{
+  "MailTemplates": {
+    "Templates": [
+      {
+        "Key": "Karta",
+        "DMailsId": 2,
+        "SubjectTemplate": "Wydanie nowej karty - nowy pracownik - {{FirstName}} {{LastName}}",
+        "HtmlTemplatePath": "wwwroot/templates/Karta.html"
+      },
+      {
+        "Key": "Karta-changed",
+        "DMailsId": 2,
+        "SubjectTemplate": "Wydanie nowej karty - zmiana danych pracownika - {{FirstName}} {{LastName}}",
+        "HtmlTemplatePath": "wwwroot/templates/Karta-changed.html"
+      },
+      {
+        "Key": "Karta-lost",
+        "DMailsId": 2,
+        "SubjectTemplate": "Wydanie nowej karty - zgubiona karta - {{FirstName}} {{LastName}}",
+        "HtmlTemplatePath": "wwwroot/templates/Karta-lost.html"
+      },
+      {
+        "Key": "HR",
+        "DMailsId": 1,
+        "SubjectTemplate": "Błąd zmiany danych w systemie HR - nowy pracownik / karta - {{FirstName}} {{LastName}}",
+        "HtmlTemplatePath": "wwwroot/templates/HR.html"
+      },
+      {
+        "Key": "SzafyŚOI",
+        "DMailsId": 3,
+        "SubjectTemplate": "Szafy środków ochrony indywidualnej - nowy pracownik / karta - {{FirstName}} {{LastName}}",
+        "HtmlTemplatePath": "wwwroot/templates/SzafyŚOI.html"
+      },
+      {
+        "Key": "SzafyŚOI-fire",
+        "DMailsId": 3,
+        "SubjectTemplate": "Szafy środków ochrony indywidualnej - usunięcie pracownika - {{FirstName}} {{LastName}}",
+        "HtmlTemplatePath": "wwwroot/templates/SzafyŚOI-fire.html"
+      },
+      {
+        "Key": "Obiady",
+        "DMailsId": 5,
+        "SubjectTemplate": "Deklaracja obiadowa - nowy pracownik / karta - {{FirstName}} {{LastName}}",
+        "HtmlTemplatePath": "wwwroot/templates/Obiady.html"
+      },
+      {
+        "Key": "Obiady-fire",
+        "DMailsId": 5,
+        "SubjectTemplate": "Deklaracja obiadowa - usunięcie pracownika - {{FirstName}} {{LastName}}",
+        "HtmlTemplatePath": "wwwroot/templates/Obiady-fire.html"
+      },
+      {
+        "Key": "Obiady2",
+        "DMailsId": 6,
+        "SubjectTemplate": "Nowy pracownik / dane pracownika",
+        "HtmlTemplatePath": "wwwroot/templates/Obiady2.html",
+        "CcDMailsId": 5
+      },
+      {
+        "Key": "Obiady2-fire",
+        "DMailsId": 6,
+        "SubjectTemplate": "Usunięcie pracownika",
+        "HtmlTemplatePath": "wwwroot/templates/Obiady2-fire.html",
+        "CcDMailsId": 5
+      },
+      {
+        "Key": "Wózki",
+        "DMailsId": 7,
+        "SubjectTemplate": "Uprawnienia na wózki - nowy pracownik / karta - {{FirstName}} {{LastName}}",
+        "HtmlTemplatePath": "wwwroot/templates/Wózki.html"
+      },
+      {
+        "Key": "Wózki-fire",
+        "DMailsId": 7,
+        "SubjectTemplate": "Uprawnienia na wózki - usunięcie pracownika - {{FirstName}} {{LastName}}",
+        "HtmlTemplatePath": "wwwroot/templates/Wózki-fire.html"
+      },
+      {
+        "Key": "BazaJakości",
+        "DMailsId": 8,
+        "SubjectTemplate": "Baza jakości - nowy pracownik - {{FirstName}} {{LastName}}",
+        "HtmlTemplatePath": "wwwroot/templates/BazaJakości.html"
+      },
+      {
+        "Key": "BazaJakości-fire",
+        "DMailsId": 8,
+        "SubjectTemplate": "Baza jakości - usunięcie pracownika - {{FirstName}} {{LastName}}",
+        "HtmlTemplatePath": "wwwroot/templates/BazaJakości-fire.html"
+      },
+      {
+        "Key": "BazaJakości-changed",
+        "DMailsId": 8,
+        "SubjectTemplate": "Baza jakości - zmiana danych pracownika - {{FirstName}} {{LastName}}",
+        "HtmlTemplatePath": "wwwroot/templates/BazaJakości-changed.html"
+      },
+      {
+        "Key": "Szafki-changed",
+        "DMailsId": 4,
+        "SubjectTemplate": "Szafki - zmiana działu pracownika - {{FirstName}} {{LastName}}",
+        "HtmlTemplatePath": "wwwroot/templates/Szafki-changed.html"
+      },
+      {
+        "Key": "Szafki-fire",
+        "DMailsId": 4,
+        "SubjectTemplate": "Szafki - zwolnienie pracownika - {{FirstName}} {{LastName}}",
+        "HtmlTemplatePath": "wwwroot/templates/Szafki-fire.html"
+      }
+    ]
+  }
+}

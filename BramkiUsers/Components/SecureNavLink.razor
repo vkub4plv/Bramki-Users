@@ -1,0 +1,48 @@
+﻿@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Routing
+@inject IAuthorizationService Authorization
+
+@if (allowed == true)
+{
+    <NavLink class="tile tile-link" href="@Href" title="@Title" Match="NavLinkMatch.Prefix">
+        @if (Icon is not null)
+        {
+            <span class="icon">@Icon</span>
+        }
+        <span class="label">@Label</span>
+    </NavLink>
+}
+else if (allowed == false)
+{
+    <span class="tile disabled" aria-disabled="true" title="@Title">
+        @if (Icon is not null)
+        {
+            <span class="icon">@Icon</span>
+        }
+        <span class="label">@Label</span>
+    </span>
+}
+else
+{
+    <span class="tile disabled" aria-hidden="true">@Label</span>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthenticationStateTask { get; set; } = default!;
+
+    [Parameter] public string Href { get; set; } = "";
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public string? Policy { get; set; }
+    [Parameter] public string Title { get; set; } = "";
+    [Parameter] public RenderFragment? Icon { get; set; }
+
+    private bool? allowed;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (string.IsNullOrWhiteSpace(Policy)) { allowed = true; return; }
+
+        var user = (await AuthenticationStateTask).User;
+        allowed = (await Authorization.AuthorizeAsync(user, Policy)).Succeeded;
+    }
+}

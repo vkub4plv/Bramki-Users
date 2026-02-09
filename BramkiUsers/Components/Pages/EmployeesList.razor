@@ -1,0 +1,181 @@
+﻿@page "/employees"
+@using BramkiUsers.Data
+@using Microsoft.EntityFrameworkCore
+@using System.Threading
+@attribute [Authorize(Policy = "EmployeesAccess")]
+@inject IDbContextFactory<RaportowanieContext> DbFactory
+@inject IDepartmentLookup DeptLookup
+@inject NavigationManager Nav
+
+<div class="phone-shell">
+    <div class="phone-inner">
+        <div class="panel-header">
+            <button class="back-btn" @onclick="GoHome" title="Wróć">
+                <img src="icons/Back.svg" alt="Wstecz" class="back-icon" />
+            </button>
+
+            <div class="panel-title">
+                <img src="icons/Pracownicy.svg" alt="" class="title-icon" />
+                <span>Pracownicy</span>
+            </div>
+
+            <div class="panel-spacer"></div>
+        </div>
+
+        @if (_rows is null)
+        {
+            <div class="loading">Wczytywanie…</div>
+        }
+        else
+        {
+            <div class="list-area">
+                <div class="table-scroll">
+                    <table class="emp-table">
+                        <thead>
+                            <tr class="head-row">
+                                <th>Numer pracownika</th>
+                                <th>Imię</th>
+                                <th>Nazwisko</th>
+                                <th>Dział</th>
+                            </tr>
+
+                            <tr class="underline">
+                                <th colspan="4"></th>
+                            </tr>
+
+                            <tr class="filters">
+                                <th>
+                                    <input class="filter" placeholder="Szukaj…"
+                                           @bind="_erpTerm" @bind:event="oninput" @bind:after="ScheduleSearch" />
+                                </th>
+                                <th>
+                                    <input class="filter" placeholder="Szukaj…"
+                                           @bind="_firstTerm" @bind:event="oninput" @bind:after="ScheduleSearch" />
+                                </th>
+                                <th>
+                                    <input class="filter" placeholder="Szukaj…"
+                                           @bind="_lastTerm" @bind:event="oninput" @bind:after="ScheduleSearch" />
+                                </th>
+                                <th>
+                                    <input class="filter" placeholder="Szukaj…"
+                                           @bind="_deptTerm" @bind:event="oninput" @bind:after="ScheduleSearch" />
+                                </th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            @if (_rows.Count == 0)
+                            {
+                                <tr class="empty"><td colspan="4">Brak wyników.</td></tr>
+                            }
+                            else
+                            {
+                                @foreach (var r in _rows)
+                                {
+                                    var selected = _selectedId == r.Id;
+                                    <tr class="@((selected ? "selected" : null))"
+                                        @onclick="@(() => Select(r.Id))"
+                                        @ondblclick="@(() => Open(r.Id))">
+                                        <td>@r.ErpId</td>
+                                        <td>@r.FirstName</td>
+                                        <td>@r.LastName</td>
+                                        <td>@r.DepartmentText</td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="panel-footer">
+                <button class="gbtn gbtn-border gbtn-cta" disabled="@(_selectedId is null)" @onclick="OpenSelected">Wybierz</button>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private List<Row>? _rows;
+    private int? _selectedId;
+    private string _erpTerm = "", _firstTerm = "", _lastTerm = "", _deptTerm = "";
+    private CancellationTokenSource? _searchCts;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        // Make sure the global map is ready
+        await DeptLookup.EnsureLoadedAsync();
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var q = db.DUsers.AsNoTracking()
+            .Where(u => u.IsActive == true &&
+                        u.ErpId != null && u.ErpId != "" &&
+                        (u.CardNumber == null || u.CardNumber == "" || !EF.Functions.Like(u.CardNumber!, "%[^0-9]%")) &&
+                        u.Gates.Any());
+
+        if (!string.IsNullOrWhiteSpace(_erpTerm))
+            q = q.Where(u => u.ErpId!.Contains(_erpTerm));
+        if (!string.IsNullOrWhiteSpace(_firstTerm))
+            q = q.Where(u => (u.Name ?? "").Contains(_firstTerm));
+        if (!string.IsNullOrWhiteSpace(_lastTerm))
+            q = q.Where(u => (u.Name ?? "").Contains(_lastTerm));
+
+        // fetch from DB
+        var raw = await q.OrderByDescending(u => u.Id)
+                         .Select(u => new { u.Id, u.ErpId, u.Name, u.DepartmentId })
+                         .Take(500)
+                         .ToListAsync();
+
+        // project + attach trimmed department name (only for "People " depts)
+        var projected = raw.Select(x =>
+        {
+            var (f, l) = SplitName(x.Name);
+            var deptText = DeptLookup.TryGetName(x.DepartmentId, out var nm) ? nm : "";
+            return new Row(x.Id, x.ErpId!, f, l, x.DepartmentId, deptText);
+        });
+
+        // filter by department TEXT (client-side, after trim)
+        if (!string.IsNullOrWhiteSpace(_deptTerm))
+        {
+            var term = _deptTerm.Trim();
+            projected = projected.Where(r => r.DepartmentText.Contains(term, StringComparison.CurrentCultureIgnoreCase));
+        }
+
+        _rows = projected.ToList();
+
+        if (_selectedId is int id && _rows.All(r => r.Id != id))
+            _selectedId = null;
+    }
+
+    private async Task ScheduleSearch()
+    {
+        _searchCts?.Cancel();
+        var cts = _searchCts = new CancellationTokenSource();
+        try
+        {
+            await Task.Delay(250, cts.Token);
+            if (!cts.IsCancellationRequested)
+                await LoadAsync();
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    private static (string First, string Last) SplitName(string? fullName)
+    {
+        var n = (fullName ?? "").Trim();
+        if (n.Length == 0) return ("", "");
+        var i = n.LastIndexOf(' ');
+        if (i <= 0 || i == n.Length - 1) return (n, "");
+        return (n[..i], n[(i + 1)..]);
+    }
+
+    private void GoHome() => Nav.NavigateTo(Nav.BaseUri);
+    private void Select(int id) => _selectedId = id;
+    private void OpenSelected() { if (_selectedId is int id) Open(id); }
+    private void Open(int id) => Nav.NavigateTo($"employees/{id}");
+
+    private record Row(int Id, string ErpId, string FirstName, string LastName, int? DepartmentId, string DepartmentText);
+}

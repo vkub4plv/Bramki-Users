@@ -1,0 +1,16 @@
+﻿.phone-inner {
+    grid-template-rows: auto 1fr;
+    --menu-gap: 100px;
+}
+
+@media screen and (max-height: 1080px) {
+    .phone-inner {
+        --menu-gap: 80px;
+    }
+}
+
+@media screen and (max-height: 720px) {
+    .phone-content {
+        --menu-gap: 60px;
+    }
+}

@@ -1,0 +1,541 @@
+﻿@page "/hiring"
+@attribute [Authorize(Policy = "HireAccess")]
+@using Microsoft.EntityFrameworkCore
+@using BramkiUsers.Data
+@inject NavigationManager Nav
+@inject IDepartmentLookup DeptLookup
+@inject IDbContextFactory<RaportowanieContext> DbFactory
+@inject VisoFacadeShared Viso
+@inject TemplateMailer Mailer
+@inject IToastService Toasts
+
+<div class="phone-shell">
+    <div class="phone-inner hiring-inner">
+        <!-- Header (Back | centered title | spacer) -->
+        <div class="panel-header">
+            <button class="back-btn" @onclick="GoHome" title="Wróć">
+                <img src="icons/Back.svg" alt="Wstecz" class="back-icon" />
+            </button>
+
+            <div class="panel-title">
+                <img src="icons/Zatrudnianie.svg" alt="" class="title-icon" />
+                <span>Zatrudnianie</span>
+            </div>
+
+            <div class="panel-spacer"></div>
+        </div>
+
+        <!-- Form -->
+        <div class="hire-scroll">
+            <ToastHost />
+
+            <div class="form-grid">
+                <!-- ERPID (exactly 8 digits) -->
+                <label class="field-label" for="erpid">Numer pracownika</label>
+                <input id="erpid" class="text-input"
+                       inputmode="numeric" pattern="\d{8}" title="Dokładnie 8 cyfr"
+                       maxlength="8"
+                       @bind="ErpId" @bind:event="oninput" />
+
+                <!-- First name -->
+                <label class="field-label" for="first">Imię</label>
+                <input id="first" class="text-input"
+                       @bind="FirstName" @bind:event="oninput" />
+
+                <!-- Last name -->
+                <label class="field-label" for="last">Nazwisko</label>
+                <input id="last" class="text-input"
+                       @bind="LastName" @bind:event="oninput" />
+
+                @* HRSystem (digits only); visible & required only for workers *@
+                @if (RequireHRSystem)
+                {
+                    <label class="field-label" for="wd">Numer HRSystem</label>
+                    <input id="wd" class="text-input"
+                           inputmode="numeric" pattern="\d*" title="Tylko cyfry"
+                           @bind="HRSystemNumber" @bind:event="oninput" />
+                }
+
+                @* Phone; visible & required only when Lunch is checked *@
+                @if (RequirePhone)
+                {
+                    <label class="field-label" for="phone">Numer telefonu</label>
+                    <input id="phone" class="text-input"
+                           inputmode="tel"
+                           pattern="\+?\d*" title="Tylko cyfry i opcjonalny plus na początku"
+                           @bind="PhoneNumber" @bind:event="oninput" />
+                }
+
+                <!-- Department -->
+                <label class="field-label" for="dept">Dział</label>
+                <div class="select-wrap">
+                    <select id="dept" class="select-input" @bind="SelectedDeptId">
+                        <option value="">Wybierz z listy…</option>
+                        @foreach (var d in _departments)
+                        {
+                            <option value="@d.Id">@d.Name</option>
+                        }
+                    </select>
+                    <span class="select-caret">
+                        <img src="icons/Down.svg" alt="" />
+                    </span>
+                </div>
+
+                <!-- Checkboxes -->
+                <label class="check-row disabled">
+                    <input type="checkbox" @bind="PpeStorage" disabled />
+                    <span>Dostęp do szaf z ŚOI</span>
+                </label>
+
+                <label class="check-row">
+                    <input type="checkbox" @bind="Lunch" />
+                    <span>Deklaracja obiadowa</span>
+                </label>
+
+                <label class="check-row">
+                    <input type="checkbox" @bind="Forklifts" />
+                    <span>Uprawnienia na wózki</span>
+                </label>
+
+                <label class="check-row">
+                    <input type="checkbox" @bind="Cranes" />
+                    <span>Uprawnienia na suwnice</span>
+                </label>
+
+                <label class="check-row">
+                    <input type="checkbox" @bind="Gantries" />
+                    <span>Uprawnienia na żurawie</span>
+                </label>
+
+                <label class="check-row disabled">
+                    <input type="checkbox" @bind="QualityBase" disabled />
+                    <span>Baza jakości</span>
+                </label>
+
+            </div>
+
+            <div class="scroll-spacer"></div>
+
+            <!-- CTA -->
+            <div class="cta-wrap">
+                <button class="gbtn gbtn-border gbtn-cta" disabled="@(!CanHire || _busy)" @onclick="HireAsync">
+                    @(_busy ? "Przetwarzanie…" : "Zatrudnij")
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Inject] private IAudit<Hiring> Audit { get; set; } = default!;
+
+    private sealed record HireInputAudit(
+        string ErpId,
+        string FirstName,
+        string LastName,
+        string? HRSystemNumber,
+        string? PhoneNumber,
+        int? DepartmentId,
+        string? DepartmentName,
+        bool PpeStorage,
+        bool Lunch,
+        bool Forklifts,
+        bool Cranes,
+        bool Gantries,
+        bool QualityBase
+    );
+
+    // ---- local helpers/limits (match EF model) ----
+    private static string Digits(string? s) => new string((s ?? "").Where(char.IsDigit).ToArray());
+    private static string TrimTo(string s, int max) => s.Length > max ? s[..max] : s;
+    private static string PhoneChars(string? s)
+    {
+        var result = new List<char>();
+
+        foreach (var ch in s ?? "")
+        {
+            if (char.IsDigit(ch))
+            {
+                result.Add(ch);
+            }
+            else if (ch == '+' && result.Count == 0)
+            {
+                // allow a single leading plus
+                result.Add(ch);
+            }
+            // ignore everything else (spaces, hyphens, etc.)
+        }
+
+        return new string(result.ToArray());
+    }
+    private static string NormalizePersonName(string? s)
+    {
+        var input = (s ?? "").Trim();
+        if (input.Length == 0) return "";
+
+        var chars = input.ToLowerInvariant().ToCharArray();
+        bool newWord = true;
+
+        for (int i = 0; i < chars.Length; i++)
+        {
+            var ch = chars[i];
+
+            if (newWord && char.IsLetter(ch))
+            {
+                chars[i] = char.ToUpperInvariant(ch);
+                newWord = false;
+            }
+
+            // Start new "word" after space, hyphen, or apostrophe (both types)
+            if (ch == ' ' || ch == '-' || ch == '\'' || ch == '’')
+                newWord = true;
+        }
+
+        return new string(chars);
+    }
+
+    private const int ErpLen = 8;
+    private const int MaxLogin = 50;   // includes domain/backslash if present
+    private const int MaxName = 200;
+
+    private static bool IsFemale(string first)
+        => (first ?? "").Trim().EndsWith("a", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsWorkerFromErp(string erpDigits)
+    {
+        var s = (erpDigits ?? "").TrimStart('0');
+        return s.Length > 0 && s[0] == '1';
+    }
+
+    // text fields
+    private string _erpId = "";
+    private string ErpId
+    {
+        get => _erpId;
+        set
+        {
+            // enforce digits-only and exact length cap to 8
+            var d = Digits(value);
+            _erpId = d.Length > ErpLen ? d[..ErpLen] : d;
+
+            // if this ERP stops being a worker -> hide & clear HRSystem
+            if (!RequireHRSystem)
+                HRSystemNumber = "";
+        }
+    }
+
+    private string FirstName { get; set; } = "";
+    private string LastName { get; set; } = "";
+
+    // HRSystem (digits-only)
+    private string _hrSystemNumber = "";
+    private string HRSystemNumber
+    {
+        get => _hrSystemNumber;
+        set => _hrSystemNumber = Digits(value);
+    }
+
+    // Phone (digits + optional leading plus)
+    private string _phoneNumber = "";
+    private string PhoneNumber
+    {
+        get => _phoneNumber;
+        set => _phoneNumber = PhoneChars(value);
+    }
+
+    // department
+    private int? _selectedDeptId;
+    private int? SelectedDeptId
+    {
+        get => _selectedDeptId;
+        set
+        {
+            _selectedDeptId = value;
+
+            // recompute "Baza jakości" from department code
+            if (value is int id && DeptLookup.TryGetInfo(id, out var info))
+                QualityBase = string.Equals(info.Code, "Direct", StringComparison.OrdinalIgnoreCase);
+            else
+                QualityBase = false;
+        }
+    }
+
+    private sealed record DeptOption(int Id, string Name);
+    private List<DeptOption> _departments = new();
+
+    // checkboxes (two are disabled in UI)
+    private bool PpeStorage { get; set; } = true;     // always checked, disabled
+
+    private bool _lunch = false;
+    private bool Lunch
+    {
+        get => _lunch;
+        set
+        {
+            _lunch = value;
+
+            // if user unchecks Lunch, clear the phone number
+            if (!_lunch)
+                PhoneNumber = "";
+        }
+    }
+
+    private bool Forklifts { get; set; } = false;
+    private bool Cranes { get; set; } = false;
+    private bool Gantries { get; set; } = false;
+    private bool QualityBase { get; set; } = false;   // computed from department code
+
+    private bool _busy = false;
+
+    // helper: whether HRSystem field is shown/required
+    private bool RequireHRSystem => IsWorkerFromErp(ErpId);
+
+    // helper: whether phone is shown/required (depends on Lunch)
+    private bool RequirePhone => Lunch;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await DeptLookup.EnsureLoadedAsync();
+        _departments = DeptLookup.AllInfos
+            .Select(kv => new DeptOption(kv.Key, kv.Value.Name))
+            .OrderBy(d => d.Name, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+    }
+
+    private bool CanHire =>
+        ErpId?.Length == ErpLen &&                       // EXACTLY 8 digits
+        !string.IsNullOrWhiteSpace(FirstName) &&
+        !string.IsNullOrWhiteSpace(LastName) &&
+        SelectedDeptId is not null &&
+        (!RequireHRSystem || !string.IsNullOrWhiteSpace(HRSystemNumber)) &&
+        (!RequirePhone || !string.IsNullOrWhiteSpace(PhoneNumber));
+
+    private async Task HireAsync()
+    {
+        if (!CanHire || _busy) return;
+
+        DeptInfo? deptInfo = null;
+        if (SelectedDeptId is int deptId && DeptLookup.TryGetInfo(deptId, out var di))
+        {
+            deptInfo = di;
+        }
+
+        // Snapshot of the user-provided data
+        var input = new HireInputAudit(
+            ErpId: ErpId,
+            FirstName: FirstName,
+            LastName: LastName,
+            HRSystemNumber: RequireHRSystem ? HRSystemNumber : null,
+            PhoneNumber: RequirePhone ? PhoneNumber : null,
+            DepartmentId: SelectedDeptId,
+            DepartmentName: deptInfo?.Name,
+            PpeStorage: PpeStorage,
+            Lunch: Lunch,
+            Forklifts: Forklifts,
+            Cranes: Cranes,
+            Gantries: Gantries,
+            QualityBase: QualityBase
+        );
+
+        using var audit = Audit.Begin(
+            action: "Hire",
+            erpId: input.ErpId);
+
+        audit.LogStart(input);
+
+        // ---- VALIDATION ----
+        if (!DeptLookup.TryGetInfo(SelectedDeptId, out var info))
+        {
+            audit.Warn("Validation failed: department not selected or not found.");
+            Toasts.Show("Wybierz dział.", "warn", 0);
+            return;
+        }
+
+        var requiresHRSystem = RequireHRSystem;
+        if (requiresHRSystem && string.IsNullOrWhiteSpace(HRSystemNumber))
+        {
+            audit.Warn("Validation failed: HRSystem number required but missing.");
+            Toasts.Show("Podaj numer HRSystem.", "warn");
+            return;
+        }
+
+        var requiresPhone = RequirePhone;
+        if (requiresPhone && string.IsNullOrWhiteSpace(PhoneNumber))
+        {
+            audit.Warn("Validation failed: phone number required but missing.");
+            Toasts.Show("Podaj numer telefonu.", "warn");
+            return;
+        }
+
+        _busy = true;
+        StateHasChanged();
+
+        // Prepare DB-safe values
+        var erp = ErpId; // already digits-only and ≤ 8; CanHire ensures == 8
+        var first = NormalizePersonName(FirstName);
+        var last = NormalizePersonName(LastName);
+        var full = TrimTo($"{first} {last}".Trim(), MaxName);
+
+        // Login depends on HRSystem
+        var login = requiresHRSystem
+            ? TrimTo($@"company\{HRSystemNumber}", MaxLogin)
+            : "\\" + TrimTo(full, MaxLogin - 1); // keep total <= 50 incl '\'
+
+        int newUserId = 0;
+
+        // ---- DB TRANSACTION ----
+        audit.Info("Starting DB transaction for hire.");
+
+        try
+        {
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                var strategy = db.Database.CreateExecutionStrategy();
+                await strategy.ExecuteAsync(async () =>
+                {
+                    await using var tx = await db.Database.BeginTransactionAsync();
+
+                    var exists = await db.DUsers.AsNoTracking().AnyAsync(u => u.ErpId == erp);
+                    if (exists)
+                    {
+                        audit.Warn("Hire aborted: DUser with this ERPID already exists.");
+                        throw new InvalidOperationException($"Użytkownik z ERPID {erp} już istnieje.");
+                    }
+
+                    var now = DateTime.Now;
+
+                    var user = new DUser
+                    {
+                        ErpId = erp,
+                        Name = full,
+                        Login = login,
+                        DepartmentId = SelectedDeptId,
+                        IsActive = true,
+                        IsWindowsUser = true,
+                        AllowTerminalFTE = true,
+                        AllowWebFTE = false,
+                        Code = info.Code,                // Bramki_Code
+                        AdditionalInformation = info.Cc, // Bramki_CC
+                        CreatedOn = now,
+                        ModifiedOn = now,
+                        Sex = IsFemale(first),
+                        Worker = IsWorkerFromErp(erp)
+                    };
+                    db.DUsers.Add(user);
+                    await db.SaveChangesAsync();
+
+                    newUserId = user.Id;
+                    audit.Info("DB: created DUser with Id={UserId}.", newUserId);
+
+                    var gates = new DGate
+                    {
+                        DUserId = newUserId,
+                        ProvidedData = true,
+                        PpeStorageCabinets = PpeStorage,
+                        Lunch = Lunch,
+                        Forklifts = Forklifts,
+                        Cranes = Cranes,
+                        Gantries = Gantries,
+                        QualityTraining = QualityBase,
+                        HRSystem = string.IsNullOrWhiteSpace(HRSystemNumber) ? null : HRSystemNumber,
+                        Phone = string.IsNullOrWhiteSpace(PhoneNumber) ? null : PhoneNumber
+                    };
+                    db.DGates.Add(gates);
+                    await db.SaveChangesAsync();
+
+                    audit.Info("DB: created DGates row for DUser {UserId}.", newUserId);
+
+                    var userInRoles = new TUserInRoles
+                    {
+                        UserId = newUserId,
+                        RoleId = 5
+                    };
+                    db.TUserInRoles.Add(userInRoles);
+                    await db.SaveChangesAsync();
+
+                    audit.Info("DB: created TUserInRoles row for DUser {UserId} with RoleId=5.", newUserId);
+
+                    await tx.CommitAsync();
+                });
+            }
+
+            audit.Info("DB transaction for hire finished successfully.");
+        }
+        catch (DbUpdateException ex)
+        {
+            audit.Error(ex, "DB update error during hire.");
+            _busy = false;
+            Toasts.Show("Błąd zapisu do bazy: " + ex.GetBaseException().Message, "error", 0);
+            return;
+        }
+        catch (Exception ex)
+        {
+            audit.Error(ex, "Unexpected error during hire.");
+            _busy = false;
+            Toasts.Show("Błąd zapisu do bazy: " + ex.Message, "error", 0);
+            return;
+        }
+
+        // ---------- EXTERNAL SIDE-EFFECTS ----------
+        // VISO: create person in default group
+        try
+        {
+            audit.Info("Creating person in Viso for ERPID={ErpId}.", erp);
+            await Viso.CreatePersonAsync(erp, first, last);
+			audit.Info("Created person in Viso for ERPID={ErpId}.", erp);
+        }
+        catch (Exception ex)
+        {
+            audit.Error(ex, "Error while adding the person to Viso.");
+            Toasts.Show("Błąd przy dodawaniu do Viso: " + ex.Message, "error", 0);
+        }
+
+        // ---- EMAILS ----
+        try
+        {
+            audit.Info("Sending mail template 'Karta'.");
+
+            await Mailer.SendAsync("Karta", new
+            {
+                ErpId = erp,
+                FirstName = first,
+                LastName = last,
+                DepartmentName = info.Name,
+                Forklifts = Forklifts ? "Tak" : "Nie",
+                Cranes = Cranes ? "Tak" : "Nie",
+                Gantries = Gantries ? "Tak" : "Nie",
+                Id = newUserId
+            });
+
+            if (QualityBase)
+            {
+                audit.Info("QualityBase=true; sending mail template 'BazaJakości'.");
+                await Mailer.SendAsync("BazaJakości", new
+                {
+                    ErpId = erp,
+                    FirstName = first,
+                    LastName = last,
+                    DepartmentName = info.Name
+                });
+            }
+
+            audit.Info("Mail sending finished.");
+        }
+        catch (Exception ex)
+        {
+            audit.Error(ex, "Error while sending hiring e-mails.");
+            Toasts.Show("Błąd wysyłki e-mail: " + ex.Message, "error", 0);
+            // continue – hire itself succeeded; only email failed
+        }
+
+        // ---- DONE ----
+        _busy = false;
+        audit.Info("Hire completed successfully. Redirecting user.");
+        Toasts.Show("Zatrudniono pracownika.", "success", 1500);
+        StateHasChanged();
+        await Task.Delay(1500);
+        Nav.NavigateTo(Nav.BaseUri);
+    }
+
+    private void GoHome() => Nav.NavigateTo(Nav.BaseUri);
+}

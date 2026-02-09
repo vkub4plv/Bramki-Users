@@ -1,0 +1,102 @@
+﻿@page "/employees/{id:int}/cards"
+@attribute [Authorize(Policy = "CardsMenuAccess")]
+@inject NavigationManager Nav
+@inject EmployeeState State
+
+@code {
+    [Parameter] public int id { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await State.LoadAsync(id);
+        if (State.User is null)
+            Nav.NavigateTo("employees", true); // stale link -> back to list
+    }
+
+    private void BackToEmployeeMenu() => Nav.NavigateTo($"employees/{id}");
+}
+
+<div class="phone-shell">
+    <div class="phone-inner">
+        <!-- Header (Back left, centered title, spacer right) -->
+        <div class="panel-header">
+            <button class="back-btn" @onclick="BackToEmployeeMenu" title="Wróć">
+                <img src="icons/Back.svg" alt="Wstecz" class="back-icon" />
+            </button>
+
+            <div class="panel-title">
+                <img src="icons/Karty.svg" alt="Karty" class="title-icon" />
+                <span>Karty</span>
+            </div>
+
+            <div class="panel-right">
+                @if (State.User is not null)
+                {
+                    <span class="emp-name">@State.User.Name</span>
+                }
+            </div>
+        </div>
+
+        <div class="phone-content">
+            <!-- Wydawanie kart -->
+            <AuthorizeView Policy="CardsIssueAccess">
+                <Authorized>
+                    <a href="@($"employees/{id}/cards/issue")" class="menu-tile">
+                        <span class="tile-icon">
+                            <img src="icons/Karty.svg" alt="Wydawanie kart" class="inline-svg" />
+                        </span>
+                        <span class="tile-title">Wydawanie kart</span>
+                    </a>
+                </Authorized>
+                <NotAuthorized>
+                    <div class="menu-tile disabled" aria-disabled="true">
+                        <span class="tile-icon">
+                            <img src="icons/Karty-disabled.svg" alt="Wydawanie kart (brak dostępu)" class="inline-svg" />
+                        </span>
+                        <span class="tile-title">Wydawanie kart</span>
+                    </div>
+                </NotAuthorized>
+            </AuthorizeView>
+
+            <!-- Zgubione karty -->
+            <AuthorizeView Policy="CardsLostAccess">
+                <Authorized>
+                    <a href="@($"employees/{id}/cards/lost")" class="menu-tile">
+                        <span class="tile-icon">
+                            <img src="icons/ZgubioneKarty.svg" alt="Zgubione karty" class="inline-svg" />
+                        </span>
+                        <span class="tile-title">Zgubione karty</span>
+                    </a>
+                </Authorized>
+                <NotAuthorized>
+                    <div class="menu-tile disabled" aria-disabled="true">
+                        <span class="tile-icon">
+                            <img src="icons/ZgubioneKarty-disabled.svg" alt="Zgubione karty (brak dostępu)" class="inline-svg" />
+                        </span>
+                        <span class="tile-title">Zgubione karty</span>
+                    </div>
+                </NotAuthorized>
+            </AuthorizeView>
+
+            <!-- Karty zastępcze -->
+            <AuthorizeView Policy="CardsReplacementAccess">
+                <Authorized>
+                    <a href="@($"employees/{id}/cards/replacement")" class="menu-tile">
+                        <span class="tile-icon">
+                            <img src="icons/ID.svg" alt="Karty zastępcze" class="inline-svg" />
+                        </span>
+                        <span class="tile-title">Karty zastępcze</span>
+                    </a>
+                </Authorized>
+                <NotAuthorized>
+                    <div class="menu-tile disabled" aria-disabled="true">
+                        <span class="tile-icon">
+                            <img src="icons/ID-disabled.svg" alt="Karty zastępcze (brak dostępu)" class="inline-svg" />
+                        </span>
+                        <span class="tile-title">Karty zastępcze</span>
+                    </div>
+                </NotAuthorized>
+            </AuthorizeView>
+        </div>
+    </div>
+</div>

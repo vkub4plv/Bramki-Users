@@ -1,0 +1,636 @@
+﻿@page "/employees/{id:int}/edit"
+@attribute [Authorize(Policy = "EditAccess")]
+@using Microsoft.EntityFrameworkCore
+@using BramkiUsers.Data
+@inject NavigationManager Nav
+@inject EmployeeState State
+@inject IDepartmentLookup DeptLookup
+@inject IToastService Toasts
+@inject IDbContextFactory<RaportowanieContext> DbFactory
+@inject TemplateMailer Mailer
+@inject BramkiUsers.Wcf.VisoFacadeShared Viso
+
+<div class="phone-shell">
+    <div class="phone-inner hiring-inner">
+        <!-- Header -->
+        <div class="panel-header">
+            <button class="back-btn" @onclick="GoBack" title="Wróć">
+                <img src="icons/Back.svg" alt="Wstecz" class="back-icon" />
+            </button>
+
+            <div class="panel-title">
+                <img src="icons/EdycjaDanych.svg" alt="" class="title-icon" />
+                <span>Edycja danych</span>
+            </div>
+
+            <div class="panel-spacer"></div>
+        </div>
+
+        <div class="hire-scroll">
+            <ToastHost />
+
+            <div class="form-grid">
+                <!-- ERPID (readonly, 8 digits) -->
+                <label class="field-label" for="erpid">Numer pracownika</label>
+                <input id="erpid" class="text-input" value="@ErpId" readonly />
+
+                <!-- First name -->
+                <label class="field-label" for="first">Imię</label>
+                <input id="first" class="text-input"
+                       @bind="FirstName" @bind:event="oninput" />
+
+                <!-- Last name -->
+                <label class="field-label" for="last">Nazwisko</label>
+                <input id="last" class="text-input"
+                       @bind="LastName" @bind:event="oninput" />
+
+                @if (Lunch)
+                {
+                    <label class="field-label" for="phone">Numer telefonu</label>
+                    <input id="phone" class="text-input"
+                           inputmode="tel"
+                           pattern="\+?\d*" title="Tylko cyfry i opcjonalny plus na początku"
+                           @bind="PhoneNumber" @bind:event="oninput" />
+                }
+
+                <!-- Department -->
+                <label class="field-label" for="dept">Dział</label>
+                <div class="select-wrap">
+                    <select id="dept" class="select-input" @bind="SelectedDeptId">
+                        <option value="">Wybierz z listy…</option>
+                        @foreach (var d in _departments)
+                        {
+                            <option value="@d.Id">@d.Name</option>
+                        }
+                    </select>
+                    <span class="select-caret">
+                        <img src="icons/Down.svg" alt="" />
+                    </span>
+                </div>
+
+                <!-- Checkboxes -->
+                <label class="check-row disabled">
+                    <input type="checkbox" @bind="PpeStorage" disabled />
+                    <span>Dostęp do szaf z ŚOI</span>
+                </label>
+
+                <label class="check-row">
+                    <input type="checkbox" @bind="Lunch" />
+                    <span>Deklaracja obiadowa</span>
+                </label>
+
+                <label class="check-row">
+                    <input type="checkbox" @bind="Forklifts" />
+                    <span>Uprawnienia na wózki</span>
+                </label>
+
+                <label class="check-row">
+                    <input type="checkbox" @bind="Cranes" />
+                    <span>Uprawnienia na suwnice</span>
+                </label>
+
+                <label class="check-row">
+                    <input type="checkbox" @bind="Gantries" />
+                    <span>Uprawnienia na żurawie</span>
+                </label>
+
+                <label class="check-row disabled">
+                    <input type="checkbox" @bind="QualityBase" disabled />
+                    <span>Baza jakości</span>
+                </label>
+            </div>
+
+            <div class="scroll-spacer"></div>
+
+            <!-- CTA -->
+            <div class="cta-wrap">
+                <button class="gbtn gbtn-border gbtn-cta"
+                        disabled="@(!CanSave)"
+                        @onclick="SaveAsync">
+                    @( _busy ? "Zapisywanie…" : "Zapisz")
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public int id { get; set; }
+
+    [Inject] private IAudit<Edit> Audit { get; set; } = default!;
+
+    private sealed record DeptOption(int Id, string Name);
+
+    private sealed record EditInputAudit(
+        string ErpId,
+        int EmployeeId,
+        Snapshot Original,
+        Snapshot Current,
+        bool HadMainCard
+    );
+
+    // allow digits + optional leading plus, no spaces or other chars
+    private static string PhoneChars(string? s)
+    {
+        var result = new List<char>();
+
+        foreach (var ch in s ?? "")
+        {
+            if (char.IsDigit(ch))
+            {
+                result.Add(ch);
+            }
+            else if (ch == '+' && result.Count == 0)
+            {
+                // single leading +
+                result.Add(ch);
+            }
+            // ignore everything else
+        }
+
+        return new string(result.ToArray());
+    }
+
+    // form fields
+    private string ErpId = "";
+    private string FirstName = "";
+    private string LastName = "";
+    private string? CardNumber = "";
+    private string? CardNumber2 = "";
+
+    // Phone (digits + optional leading plus)
+    private string _phoneNumber = "";
+    private string PhoneNumber
+    {
+        get => _phoneNumber;
+        set => _phoneNumber = PhoneChars(value);
+    }
+
+    private int? _selectedDeptId;
+    private int? SelectedDeptId
+    {
+        get => _selectedDeptId;
+        set
+        {
+            _selectedDeptId = value;
+            // recompute QualityBase from department code (UI disabled)
+            if (value is int did && DeptLookup.TryGetInfo(did, out var info))
+                QualityBase = string.Equals(info.Code, "Direct", StringComparison.OrdinalIgnoreCase);
+            else
+                QualityBase = false;
+        }
+    }
+
+    private bool PpeStorage = true; // always true (UI disabled)
+    private bool Lunch, Forklifts, Cranes, Gantries, QualityBase;
+
+    private List<DeptOption> _departments = new();
+    private bool _busy;
+
+    private record Snapshot(
+        string ErpId, string First, string Last, int? Dept,
+        bool Lunch, bool Forklifts, bool Cranes, bool Gantries,
+        bool QualityTraining, bool PpeStorage,
+        string? CardNumber, string? CardNumber2,
+        string? PhoneNumber);
+    private Snapshot? _orig;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await DeptLookup.EnsureLoadedAsync();
+        _departments = DeptLookup.AllInfos
+            .Select(kv => new DeptOption(kv.Key, kv.Value.Name))
+            .OrderBy(d => d.Name, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await State.LoadAsync(id);
+        if (State.User is null)
+        {
+            Nav.NavigateTo("employees", true);
+            return;
+        }
+
+        PopulateFromState();
+        _orig = Current();
+    }
+
+    private void PopulateFromState()
+    {
+        ErpId = State.User?.ErpId ?? "";
+        (FirstName, LastName) = SplitName(State.User?.Name);
+        SelectedDeptId = State.User?.DepartmentId;
+        CardNumber = State.User?.CardNumber;
+        CardNumber2 = State.User?.CardNumber2;
+
+        var g = State.Gate;
+        Lunch = g?.Lunch == true;
+        Forklifts = g?.Forklifts == true;
+        Cranes = g?.Cranes == true;
+        Gantries = g?.Gantries == true;
+
+        PhoneNumber = g?.Phone ?? "";
+
+        // QualityBase is disabled in UI and derived from department,
+        // but reflect DB if present:
+        if (g?.QualityTraining == true)
+            QualityBase = true;
+        else if (SelectedDeptId is int did && DeptLookup.TryGetInfo(did, out var info))
+            QualityBase = string.Equals(info.Code, "Direct", StringComparison.OrdinalIgnoreCase);
+        else
+            QualityBase = false;
+
+        // PpeStorage is always true (disabled in UI)
+        PpeStorage = true;
+    }
+
+    private static (string First, string Last) SplitName(string? full)
+    {
+        var n = (full ?? "").Trim();
+        if (n.Length == 0) return ("", "");
+        var i = n.LastIndexOf(' ');
+        if (i <= 0 || i == n.Length - 1) return (n, "");
+        return (n[..i], n[(i + 1)..]);
+    }
+
+    private Snapshot Current() => new(
+        ErpId,
+        FirstName.Trim(),
+        LastName.Trim(),
+        SelectedDeptId,
+        Lunch,
+        Forklifts,
+        Cranes,
+        Gantries,
+        QualityBase,
+        PpeStorage,
+        CardNumber,
+        CardNumber2,
+        PhoneNumber
+    );
+
+    // phone is required only when Lunch changes from false -> true in this edit session
+    private bool RequirePhone =>
+        _orig is not null &&
+        _orig.Lunch == false &&
+        Lunch == true;
+
+    private bool IsValid =>
+        ErpId?.Length == 8 &&
+        !string.IsNullOrWhiteSpace(FirstName) &&
+        !string.IsNullOrWhiteSpace(LastName) &&
+        SelectedDeptId is not null &&
+        (!RequirePhone || !string.IsNullOrWhiteSpace(PhoneNumber));
+
+    private bool IsDirty => _orig is null || !EqualityComparer<Snapshot>.Default.Equals(_orig, Current());
+    private bool CanSave => !_busy && IsValid && IsDirty;
+
+    private static string Yn(bool v) => v ? "Tak" : "Nie";
+
+    private static string? ToLunchCard(string? dec)
+    {
+        if (string.IsNullOrWhiteSpace(dec)) return null;
+
+        // Accept big values; use the low 32 bits for the lunch mapping
+        if (!ulong.TryParse(dec, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v))
+            return null;
+
+        uint low32 = (uint)(v & 0xFFFFFFFFUL);
+        uint reversed = BinaryPrimitives.ReverseEndianness(low32);
+        return reversed.ToString("D10", CultureInfo.InvariantCulture);
+    }
+
+    private static string? ToPpeStorageCabinetsCard(string? dec)
+    {
+        if (string.IsNullOrWhiteSpace(dec)) return null;
+
+        // Accept big values; use the low 32 bits for the PpeStorageCabinets mapping
+        if (!ulong.TryParse(dec, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v))
+            return null;
+
+        uint low32 = (uint)(v & 0xFFFFFFFFUL);
+        uint reversed = BinaryPrimitives.ReverseEndianness(low32);
+        return reversed.ToString("X8", CultureInfo.InvariantCulture); // HEX
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!CanSave || _orig is null || State.User is null) return;
+
+        var erp = ErpId;
+        var old = _orig;
+        var currentSnapshot = Current();
+
+        // Check "has main card" BEFORE any updates
+        var hadMainCard = !string.IsNullOrWhiteSpace(State.User.CardNumber);
+
+        var input = new EditInputAudit(
+            ErpId: erp,
+            EmployeeId: State.User.Id,
+            Original: old,
+            Current: currentSnapshot,
+            HadMainCard: hadMainCard
+        );
+
+        using var audit = Audit.Begin(action: "Edit", erpId: erp);
+        audit.LogStart(input);
+
+        _busy = true;
+        StateHasChanged();
+
+        var now = DateTime.Now;
+        var newFullName = $"{FirstName.Trim()} {LastName.Trim()}".Trim();
+
+        // What changed?
+        var nameChanged = !string.Equals(old.First, FirstName.Trim(), StringComparison.Ordinal) ||
+                          !string.Equals(old.Last, LastName.Trim(), StringComparison.Ordinal);
+
+        var firstNameChanged = !string.Equals(old.First, FirstName.Trim(), StringComparison.Ordinal);
+        var lastNameChanged = !string.Equals(old.Last, LastName.Trim(), StringComparison.Ordinal);
+
+        var deptChanged = old.Dept != SelectedDeptId;
+        var ppeChanged = old.PpeStorage != PpeStorage;          // currently never true (UI disabled)
+        var lunchChanged = old.Lunch != Lunch;
+        var flChanged = old.Forklifts != Forklifts;
+        var crChanged = old.Cranes != Cranes;
+        var gaChanged = old.Gantries != Gantries;
+        var qChanged = old.QualityTraining != QualityBase;   // derived, but still treated independently
+        var phoneChanged = !string.Equals(old.PhoneNumber, PhoneNumber, StringComparison.Ordinal);
+
+        // If truly nothing changed, bail out gracefully
+        if (!(nameChanged || deptChanged || ppeChanged || lunchChanged || flChanged || crChanged || qChanged || phoneChanged))
+        {
+            audit.Info("Edit aborted: no changes detected for ErpId={ErpId}, EmployeeId={EmployeeId}.", erp, State.User.Id);
+            Toasts.Show("Brak zmian do zapisania.", "info", 1500);
+            _busy = false; StateHasChanged();
+            return;
+        }
+
+        audit.Info(
+            "Edit start for ErpId={ErpId}, EmployeeId={EmployeeId}. Changes: name={NameChanged}, dept={DeptChanged}, ppe={PpeChanged}, lunch={LunchChanged}, forklifts={FlChanged}, cranes={CrChanged}, gantries={GaChanged}, quality={QChanged}, phone={PhoneChanged}.",
+            erp, State.User.Id, nameChanged, deptChanged, ppeChanged, lunchChanged, flChanged, crChanged, gaChanged, qChanged, phoneChanged);
+
+        // Resolve old/new department names (for emails)
+        string? oldDeptName = null, oldDeptCode = null, newDeptName = null, newDeptCode = null, oldDeptCc = null, newDeptCc = null;
+        if (old.Dept is int od && DeptLookup.TryGetInfo(od, out var oldInfo))
+        {
+            oldDeptName = oldInfo.Name;
+            oldDeptCode = oldInfo.Code;
+            oldDeptCc = oldInfo.Cc;
+        }
+        if (SelectedDeptId is int nd && DeptLookup.TryGetInfo(nd, out var newInfo))
+        {
+            newDeptName = newInfo.Name;
+            newDeptCode = newInfo.Code;
+            newDeptCc = newInfo.Cc;
+        }
+
+        try
+        {
+            // --- 1) DB update (single context) ---
+            audit.Info("DB: updating DUser and DGates for ErpId={ErpId}, EmployeeId={EmployeeId}.", erp, State.User.Id);
+
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                var user = await db.DUsers.Include(u => u.Gates).SingleOrDefaultAsync(u => u.Id == State.User.Id);
+                if (user is null) throw new InvalidOperationException("Nie znaleziono użytkownika w bazie.");
+
+                // DUser
+                if (nameChanged) user.Name = newFullName;
+                if (deptChanged)
+                {
+                    user.DepartmentId = SelectedDeptId;
+                    user.Code = newDeptCode;
+                    user.AdditionalInformation = newDeptCc;
+                }
+                user.ModifiedOn = now;
+
+                // DGates (ensure row exists)
+                var gates = user.Gates.FirstOrDefault();
+                if (gates is null)
+                {
+                    gates = new DGate { DUserId = user.Id };
+                    db.DGates.Add(gates);
+                }
+
+                if (ppeChanged) gates.PpeStorageCabinets = PpeStorage;
+                if (lunchChanged) gates.Lunch = Lunch;
+                if (flChanged) gates.Forklifts = Forklifts;
+                if (crChanged) gates.Cranes = Cranes;
+                if (gaChanged) gates.Gantries = Gantries;
+                if (qChanged) gates.QualityTraining = QualityBase;
+                gates.ProvidedData = true; // always true once edited
+
+                gates.Phone = Lunch
+                    ? (string.IsNullOrWhiteSpace(PhoneNumber) ? null : PhoneNumber)
+                    : null;
+
+                await db.SaveChangesAsync();
+            }
+
+            audit.Info("DB commit succeeded for ErpId={ErpId}, EmployeeId={EmployeeId}.", erp, State.User.Id);
+
+            // --- 2) VISO: update first/last name if changed ---
+            if (nameChanged)
+            {
+                try
+                {
+                    audit.Info("VISO: updating person names for ErpId={ErpId}.", erp);
+                    await Viso.UpdatePersonNamesAsync(ErpId, FirstName.Trim(), LastName.Trim());
+                    audit.Info("VISO: name update completed for ErpId={ErpId}.", erp);
+                }
+                catch (Exception ex)
+                {
+                    audit.Error(ex, "Error while updating person names in VISO for ErpId={ErpId}.", erp);
+                    // Non-fatal: DB already saved; just warn
+                    Toasts.Show("Błąd aktualizacji danych w VISO: " + ex.Message, "warn");
+                }
+            }
+
+            // --- 3) Emails (post-commit) ---
+            // Build a rich payload with OLD/NEW values – every template can use what it needs
+            var mailPayload = new
+            {
+                ErpId = ErpId,
+                OldFirstName = old.First,
+                FirstName = FirstName.Trim(),
+                OldLastName = old.Last,
+                LastName = LastName.Trim(),
+                OldDepartmentName = oldDeptName,
+                DepartmentName = newDeptName,
+                OldDepartmentCode = oldDeptCode,
+                NewDepartmentCode = newDeptCode,
+
+                OldPpeStorage = Yn(old.PpeStorage),
+                PpeStorage = Yn(PpeStorage),
+                OldLunch = Yn(old.Lunch),
+                Lunch = Yn(Lunch),
+                OldForklifts = Yn(old.Forklifts),
+                Forklifts = Yn(Forklifts),
+                OldCranes = Yn(old.Cranes),
+                Cranes = Yn(Cranes),
+                OldGantries = Yn(old.Gantries),
+                Gantries = Yn(Gantries),
+                OldQualityTraining = Yn(old.QualityTraining),
+                QualityTraining = Yn(QualityBase),
+
+                OldPhoneNumber = old.PhoneNumber,
+                PhoneNumber = PhoneNumber,
+
+                OldCardNumber = old.CardNumber,
+                CardNumber = CardNumber,
+                OldCardNumber2 = old.CardNumber2,
+                CardNumber2 = CardNumber2,
+                OldLunchCardNumber = ToLunchCard(old.CardNumber),
+                LunchCardNumber = ToLunchCard(CardNumber),
+                OldPpeStorageCabinetsCardNumber = ToPpeStorageCabinetsCard(old.CardNumber),
+                PpeStorageCabinetsCardNumber = ToPpeStorageCabinetsCard(CardNumber),
+
+                Id = State.User.Id,
+
+                firstNameChanged = firstNameChanged,
+                lastNameChanged = lastNameChanged,
+                flChanged = flChanged,
+                crChanged = crChanged,
+                gaChanged = gaChanged,
+                deptChanged = deptChanged,
+                phoneChanged = phoneChanged,
+            };
+
+            // Deduped "Karty-changed"
+            var needsKartyChanged = nameChanged || flChanged || crChanged || gaChanged;
+            var whatChanged = new List<string>();
+
+            // BazaJakości-changed (dept change) – ALWAYS send when dept changed and Baza Jakości is still true (so didn't change)
+            if ((nameChanged || deptChanged) && !qChanged && QualityBase)
+            {
+                audit.Info("Sending 'BazaJakości-changed' e-mail for ErpId={ErpId}.", erp);
+                await Mailer.SendAsync("BazaJakości-changed", mailPayload);
+            }
+
+            // Dept-changed – ALWAYS send when dept changed
+            if (deptChanged)
+            {
+                audit.Info("Sending 'Szafki-changed' e-mail for ErpId={ErpId}.", erp);
+                await Mailer.SendAsync("Szafki-changed", mailPayload);
+            }
+
+            // Karta-changed – ALWAYS send when needed (even without card)
+            if (needsKartyChanged)
+            {
+                audit.Info("Sending 'Karta-changed' e-mail for ErpId={ErpId}.", erp);
+                await Mailer.SendAsync("Karta-changed", mailPayload);
+            }
+
+            // Quality base (derived but independent rule)
+            if (qChanged)
+            {
+                if (QualityBase)
+                {
+                    audit.Info("Sending 'BazaJakości' e-mail for ErpId={ErpId}.", erp);
+                    await Mailer.SendAsync("BazaJakości", mailPayload);
+                }
+                else
+                {
+                    audit.Info("Sending 'BazaJakości-fire' e-mail for ErpId={ErpId}.", erp);
+                    await Mailer.SendAsync("BazaJakości-fire", mailPayload);
+                }
+            }
+
+            // All other mails are sent ONLY if user had a main card
+            if (hadMainCard)
+            {
+                // PPE cabinets
+                if (ppeChanged)
+                {
+                    if (PpeStorage)
+                    {
+                        // Currently, this branch is never taken (PpeStorage always true)
+                        if (!needsKartyChanged)
+                        {
+                            audit.Info("Sending 'SzafyŚOI' e-mail for ErpId={ErpId}.", erp);
+                            await Mailer.SendAsync("SzafyŚOI", mailPayload);
+                        }
+                    }
+                    else
+                    {
+                        // Currently, this branch is always taken (PpeStorage always true)
+                        audit.Info("Sending 'SzafyŚOI-fire' e-mail for ErpId={ErpId}.", erp);
+                        await Mailer.SendAsync("SzafyŚOI-fire", mailPayload);
+                    }
+                }
+
+                // Lunch – both recipients
+                if (lunchChanged)
+                {
+                    if (Lunch)
+                    {
+                        if (!needsKartyChanged)
+                        {
+                            audit.Info("Sending lunch e-mails 'Obiady' & 'Obiady2' for ErpId={ErpId}.", erp);
+                            await Mailer.SendAsync("Obiady", mailPayload);
+                            await Mailer.SendAsync("Obiady2", mailPayload);
+                        }
+                    }
+                    else
+                    {
+                        audit.Info("Sending lunch '-fire' e-mails for ErpId={ErpId}.", erp);
+                        await Mailer.SendAsync("Obiady-fire", mailPayload);
+                        await Mailer.SendAsync("Obiady2-fire", mailPayload);
+                    }
+                }
+
+                if (!lunchChanged &&
+                    old.Lunch &&
+                    Lunch &&
+                    phoneChanged &&
+                    !string.IsNullOrWhiteSpace(PhoneNumber))
+                {
+                    audit.Info("Sending 'Obiady' e-mail due to phone change for ErpId={ErpId}.", erp);
+                    await Mailer.SendAsync("Obiady", mailPayload);
+                }
+
+                // Forklifts specific
+                if (flChanged)
+                {
+                    if (Forklifts)
+                    {
+                        if (!needsKartyChanged)
+                        {
+                            audit.Info("Sending 'Wózki' e-mail for ErpId={ErpId}.", erp);
+                            await Mailer.SendAsync("Wózki", mailPayload);
+                        }
+                    }
+                    else
+                    {
+                        audit.Info("Sending 'Wózki-fire' e-mail for ErpId={ErpId}.", erp);
+                        await Mailer.SendAsync("Wózki-fire", mailPayload);
+                    }
+
+                }
+            }
+
+            audit.Info("Edit completed successfully for ErpId={ErpId}, EmployeeId={EmployeeId}.", erp, State.User.Id);
+
+            // Success
+            _orig = Current(); // reset snapshot
+            Toasts.Show("Edytowano pracownika.", "success", 1500);
+            await Task.Delay(1500);
+            Nav.NavigateTo($"employees/{id}");
+        }
+        catch (Exception ex)
+        {
+            audit.Error(ex, "Error while saving edits for ErpId={ErpId}, EmployeeId={EmployeeId}.", erp, State.User.Id);
+            Toasts.Show("Błąd zapisu: " + ex.Message, "error");
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+
+    private void GoBack() => Nav.NavigateTo($"employees/{id}");
+}

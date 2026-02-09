@@ -1,0 +1,117 @@
+﻿.phone-inner {
+    grid-template-rows: auto 1fr auto; /* header | scroll | footer */
+    /* control sticky math */
+    --head-h: 52px; /* HEADER row height */
+    --uline-h: 3px; /* underline thickness */
+}
+
+/* list container (only this scrolls) */
+.list-area {
+    margin: 12px;
+    background: #ffffff;
+    color: #111;
+    border: 1px solid #bfc1c8;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.table-scroll {
+    height: 100%;
+    overflow: auto;
+}
+
+/* table */
+.emp-table {
+    width: 100%;
+    border-collapse: separate; /* helps precise sticky stacking */
+    border-spacing: 0;
+    table-layout: fixed;
+    background: #fff;
+}
+
+    /* HEADERS: single sticky row with fixed height (so math is exact) */
+    .emp-table thead .head-row th {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        background: #fff;
+        color: #111;
+        height: var(--head-h); /* fixed height for no gaps */
+        padding: 0 12px; /* vertical height via 'height' */
+        vertical-align: middle;
+        font-weight: 700;
+        font-size: 18px;
+    }
+
+    /* ONE sticky underline across the whole header (colspan=4) */
+    .emp-table thead .underline th {
+        position: sticky;
+        top: var(--head-h);
+        z-index: 5;
+        padding: 0;
+        height: var(--uline-h);
+        background: linear-gradient(135deg,#ff2d95,#8b2cff);
+    }
+
+    /* Sticky filters sit IMMEDIATELY below the underline (no gap) */
+    .emp-table thead .filters th {
+        position: sticky;
+        top: calc(var(--head-h) + var(--uline-h));
+        z-index: 4;
+        background: #fff;
+        padding: 12px 2px 12px 8px;
+        padding: 12px 2px 12px 8px;
+        border-bottom: 1px solid #d6d7db;
+    }
+
+    .emp-table .filter {
+        width: 100%;
+        background: #f6f7fa;
+        color: #111;
+        border: 1px solid #cdd0d6;
+        border-radius: 6px;
+        padding: 8px 10px;
+        outline: none;
+    }
+
+        .emp-table .filter:focus {
+            border-color: #b64cff;
+            box-shadow: 0 0 0 2px rgba(182,76,255,.18);
+        }
+
+    /* body rows */
+    .emp-table tbody td {
+        padding: 18px 12px;
+        border-bottom: 1px solid #e5e6ea;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .emp-table tbody tr {
+        cursor: pointer;
+    }
+
+        .emp-table tbody tr:hover {
+            background: #f7f5ff;
+        }
+
+        .emp-table tbody tr.selected {
+            background: #f2eaff;
+            outline: 2px solid rgba(182,76,255,.55);
+            outline-offset: -2px;
+        }
+
+    .emp-table tr.empty td {
+        text-align: center;
+        padding: 28px 12px;
+    }
+
+/* footer */
+.panel-footer {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 15px 18px 0px;
+    border-top: 1px solid #2a2a2f;
+}
