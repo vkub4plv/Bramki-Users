@@ -360,7 +360,7 @@
         var phoneChanged = !string.Equals(old.PhoneNumber, PhoneNumber, StringComparison.Ordinal);
 
         // If truly nothing changed, bail out gracefully
-        if (!(nameChanged || deptChanged || ppeChanged || lunchChanged || flChanged || crChanged || qChanged || phoneChanged))
+        if (!(nameChanged || deptChanged || ppeChanged || lunchChanged || flChanged || crChanged || gaChanged || qChanged || phoneChanged))
         {
             audit.Info("Edit aborted: no changes detected for ErpId={ErpId}, EmployeeId={EmployeeId}.", erp, State.User.Id);
             Toasts.Show("Brak zmian do zapisania.", "info", 1500);
